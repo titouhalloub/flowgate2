@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flowgate — Live Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>  :root { --ink:#0B1B23; --ink-2:#12262F; --ink-3:#1A343F; --gold:#C9A24B; --gold-soft:#E4C878; --sand:#B9AD97; --paper:#EDE6D8; --teal:#4C7A6E; --teal-soft:#6FA093; --amber:#D98E3B; --amber-soft:#F0B978; --line:rgba(237,230,216,0.14); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ink); color:var(--paper); font-family:'IBM Plex Sans',sans-serif; line-height:1.6; }
+  ::selection { background:var(--gold); color:var(--ink); }
+  h1,h2,h3 { font-family:'Spectral',serif; font-weight:500; margin:0; }
+  .mono { font-family:'IBM Plex Mono',monospace; }
+  a { color:var(--gold-soft); }
+  nav { position:sticky; top:0; z-index:50; background:rgba(11,27,35,0.95); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+  nav .nav-wrap { display:flex; justify-content:space-between; align-items:center; padding:16px 28px; max-width:1100px; margin:0 auto; }
+  .brand { font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.08em; color:var(--sand); text-transform:uppercase; }
+  .brand strong { color:var(--gold-soft); }
+  .hero-badge { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--teal-soft); border:1px solid var(--teal); border-radius:12px; padding:4px 10px; }
+  .conn-status { display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--sand); cursor:pointer; }
+  .conn-dot { width:7px; height:7px; border-radius:50%; background:var(--sand); }
+  .conn-dot.ok { background:var(--teal-soft); }
+  .conn-dot.bad { background:var(--amber); }
+  #settings { display:none; background:var(--ink-2); border-bottom:1px solid var(--line); }
+  #settings.open { display:block; }
+  #settings .nav-wrap { padding:16px 28px; display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--sand); text-transform:uppercase; letter-spacing:.04em; }
+  .field input { background:var(--ink); border:1px solid var(--line); color:var(--paper); padding:8px 10px; border-radius:4px; font-family:'IBM Plex Mono',monospace; font-size:13px; min-width:220px; }
+  .field input:focus { outline:none; border-color:var(--gold); }
+  .btn { font-family:'IBM Plex Mono',monospace; font-size:12.5px; padding:9px 16px; border-radius:4px; border:1px solid var(--gold); color:var(--ink); background:var(--gold-soft); cursor:pointer; }
+  .btn:hover { background:var(--gold); }
+  .btn.ghost { background:transparent; color:var(--gold-soft); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  main { padding:28px; max-width:1100px; margin:0 auto; }
+  .panel { background:var(--ink-2); border:1px solid var(--line); border-radius:8px; padding:22px; }
+  .panel h3 { font-size:15px; margin:0 0 4px; }
+  .panel .cap { font-size:12px; color:var(--sand); margin:0 0 12px; font-family:'IBM Plex Mono',monospace; }
+  .dashboard-grid { display:grid; grid-template-columns:260px 1fr; gap:22px; }
+  .sidebar { display:flex; flex-direction:column; gap:16px; }
+  .dashboard-grid > .main-area { display:flex; flex-direction:column; gap:18px; }
+  .input-tabs { display:flex; gap:2px; margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .input-tabs button { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px 14px; border:none; background:transparent; color:var(--sand); cursor:pointer; border-bottom:2px solid transparent; }
+  .input-tabs button.active { border-color:var(--gold); color:var(--paper); }
+  textarea#doc-text { width:100%; min-height:120px; background:var(--ink); border:1px solid var(--line); color:var(--paper); padding:14px; border-radius:6px; font-family:'IBM Plex Mono',monospace; font-size:13px; resize:vertical; }
+  textarea#doc-text:focus { outline:none; border-color:var(--gold); }
+  .steps { display:flex; gap:0; margin:20px 0; }
+  .step { flex:1; text-align:center; position:relative; }
+  .step:not(:last-child)::after { content:""; position:absolute; top:14px; left:50%; width:100%; height:1px; background:var(--line); z-index:0; }
+  .step .dot { width:26px; height:26px; border-radius:50%; background:var(--ink); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; margin:0 auto 6px; position:relative; z-index:1; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--sand); }
+  .step.active .dot { border-color:var(--gold); color:var(--gold-soft); }
+  .step.done .dot { border-color:var(--teal-soft); color:var(--teal-soft); }
+  .step .label { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--sand); }
+  .step.active .label, .step.done .label { color:var(--paper); }
+  .results-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px; }
+  .bottom-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; }
+  @media (max-width:760px) { .results-grid{grid-template-columns:1fr;} .dashboard-grid{grid-template-columns:1fr;} .bottom-grid{grid-template-columns:1fr;} }
+  .field-list { display:flex; flex-direction:column; gap:9px; }
+  .field-item { display:flex; justify-content:space-between; align-items:baseline; }
+  .field-item .k { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--sand); }
+  .field-item .v { font-size:14px; color:var(--paper); }
+  .field-item .conf { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--gold-soft); }
+  .checklist { display:flex; flex-direction:column; gap:7px; }
+  .check { display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:12.5px; }
+  .check .mark { width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; flex-shrink:0; }
+  .check.pass .mark { background:rgba(111,160,147,0.2); color:var(--teal-soft); border:1px solid var(--teal); }
+  .check.fail .mark { background:rgba(217,142,59,0.2); color:var(--amber); border:1px solid var(--amber); }
+  .check .text { color:var(--paper); }
+  .check.pass { color:var(--teal-soft); }
+  .check.fail { color:var(--amber); }
+  .ct-bar { display:flex; width:100%; height:32px; border-radius:6px; overflow:hidden; border:1px solid var(--line); margin-top:12px; }
+  .ct-bar-seg { display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink); transition:flex-basis .6s ease; white-space:nowrap; overflow:hidden; }
+  .ct-bar-seg.gold { background:var(--gold-soft); }
+  .ct-bar-seg.teal { background:var(--teal-soft); }
+  .ct-bar-seg.ember { background:var(--amber-soft); }
+  .ct-legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; }
+  .ct-legend-item { display:flex; align-items:center; gap:6px; color:var(--sand); }
+  .ct-legend-dot { width:8px; height:8px; border-radius:2px; }
+  .stat-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; font-family:'IBM Plex Mono',monospace; }
+  .stat-row:last-child { border-bottom:none; }
+  .stat-row .k { color:var(--sand); } .stat-row .v { color:var(--paper); }
+  #last-result .stat-row { gap:10px; align-items:baseline; }
+  #last-result .stat-row .v { flex:1; min-width:0; text-align:right; overflow-wrap:anywhere; word-break:break-word; }
+  .ct-toggle-row { display:flex; gap:6px; margin-top:10px; }
+  .ct-toggle-btn { flex:1; font-family:'IBM Plex Mono',monospace; font-size:11.5px; padding:7px 6px; border-radius:4px; border:1px solid var(--line); background:var(--ink); color:var(--sand); cursor:pointer; }
+  .ct-toggle-btn.active { border-color:var(--gold); color:var(--gold-soft); }
+  .ct-toggle-btn:disabled { opacity:.45; cursor:not-allowed; }
+  .error-box { background:rgba(217,142,59,0.1); border:1px solid rgba(240,185,120,0.35); border-radius:6px; padding:12px 14px; font-size:13px; color:var(--amber-soft); margin-top:10px; display:none; }
+  .error-box.show { display:block; }
+  .footer-note { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--sand); text-align:center; margin-top:24px; }
+  .timeline-item { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .timeline-item:last-child { border-bottom:none; }
+  .timeline-dot { width:6px; height:6px; border-radius:50%; background:var(--teal-soft); margin-top:7px; }
+  .timeline-text { font-size:12.5px; }
+  .timeline-text.mono { font-family:'IBM Plex Mono',monospace; color:var(--paper); }
+  .timeline-text.sub { color:var(--sand); font-family:'IBM Plex Mono',monospace; font-size:11px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-wrap">
+    <div class="brand">Flowgate <strong>/// Live Demo</strong></div>
+    <span class="hero-badge">Operational Dashboard</span>
+    <div class="conn-status" id="conn-toggle">
+      <span class="conn-dot" id="conn-dot"></span>
+      <span id="conn-text">not connected</span>
+    </div>
+  </div>
+  <div id="settings">
+    <div class="nav-wrap">
+      <div class="field"><label>API base URL</label><input type="text" id="api-base" placeholder="https://your-api.example.com" /></div>
+      <div class="field"><label>API key</label><input type="password" id="api-key" placeholder="X-API-Key" /></div>
+      <button class="btn" id="connect-btn">Connect</button>
+    </div>
+  </div>
+</nav>
+<main>
+  <div class="dashboard-grid">
+    <aside class="sidebar">
+      <div class="panel">
+        <h3>Last Result</h3>
+        <div class="cap">Most recent document processed</div>
+        <div id="last-result"><span class="cap">No document processed yet.</span></div>
+      </div>
+    </aside>
+    <div class="main-area">
+      <div class="panel">
+        <h3>Document</h3>
+        <div class="cap">Paste text or upload a real file (PDF / scan / image / .txt)</div>
+        <div class="input-tabs">
+          <button id="tab-paste" class="active">Paste text</button>
+          <button id="tab-upload">Upload file</button>
+        </div>
+        <div id="paste-area">
+          <textarea id="doc-text" placeholder="Paste a loan agreement, sukuk certificate, or term sheet here..."></textarea>
+        </div>
+        <div id="upload-area" style="display:none;">
+          <div style="border:2px dashed var(--line); border-radius:6px; padding:28px; text-align:center;">
+            <input type="file" id="file-input" accept=".pdf,.txt,.md,.html,.png,.jpg,.jpeg,.gif" style="display:none;" />
+            <label for="file-input" class="btn ghost" style="cursor:pointer;">Choose a file</label>
+            <div class="cap" style="margin-top:10px;" id="file-name">No file selected</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Compliance Mode</h3>
+        <div class="cap">Traditional (KYC/AML, rate sanity) or Islamic (contract type, asset backing, no riba)</div>
+        <div class="input-tabs" style="margin-bottom:0;">
+          <button id="mode-traditional" class="active">Traditional</button>
+          <button id="mode-islamic">Islamic</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3>Process</h3>
+          <button class="btn" id="run-btn">Process document</button>
+        </div>
+        <div class="cap" style="margin-top:6px;">Runs classify → extract → compliance gate → ledger</div>
+        <div class="steps" id="steps">
+          <div class="step" data-step="classify"><div class="dot">1</div><div class="label">Classify</div></div>
+          <div class="step" data-step="extract"><div class="dot">2</div><div class="label">Extract</div></div>
+          <div class="step" data-step="compliance"><div class="dot">3</div><div class="label">Compliance</div></div>
+          <div class="step" data-step="ledger"><div class="dot">4</div><div class="label">Ledger</div></div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--gold-soft);" id="timer"></div>
+        <div class="error-box" id="error-box"></div>
+      </div>
+
+      <div class="results-grid">
+        <div class="panel">
+          <h3>Extracted Fields</h3>
+          <div class="cap">What the pipeline read from the document</div>
+          <div class="field-list" id="fields-list"></div>
+        </div>
+        <div class="panel">
+          <h3>Compliance Findings</h3>
+          <div class="cap" id="compliance-desc">Configurable rules check the extracted data against the chosen mode.</div>
+          <div class="checklist" id="checklist"></div>
+          <div id="fix-row" style="display:none; margin-top:12px;" class="error-box">
+            <button class="btn ghost" id="fix-btn">Attach the missing fatwa & re-check</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Audit Trail</h3>
+        <div class="cap">Every decision, traceable.</div>
+        <div id="ledger-list"></div>
+        <div class="footer-note">Flowgate ships with document intake + dual-mode compliance + event-sourced cap table. Capital-call orchestration, transfer rules, vesting, and SAFE conversion math are next phase. This demo runs against your live API.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-grid">
+    <div class="panel">
+      <h3>Cap Table</h3>
+      <div class="cap">Event-sourced — ownership computed, never stored as a snapshot.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" id="captable-setup-btn">Set up a demo company</button>
+        <button class="btn ghost" id="captable-round-btn" disabled>Run a Series A round</button>
+      </div>
+      <div class="ct-toggle-row" style="display:flex; gap:6px; margin-top:10px;">
+        <button class="ct-toggle-btn" id="ct-view-before">Before the round</button>
+        <button class="ct-toggle-btn" id="ct-view-after" disabled>After the round</button>
+      </div>
+      <div class="ct-bar" id="ownership-bar"></div>
+      <div class="ct-legend" id="ownership-legend"></div>
+      <div class="stat-row" style="margin-top:12px;"><span class="k">Total diluted</span><span class="v" id="ct-total">—</span></div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--amber);margin-top:10px;cursor:pointer;" id="ct-seed-hint">↑ Processes will auto-seed a Series A demo</div>
+    </div>
+    <div class="panel">
+      <h3>Cap Table Proposals</h3>
+      <div class="cap">Issuances read from documents, awaiting your decision</div>
+      <div id="proposals-list" class="field-list"><span class="cap">Connect, then process a document that clears both confidence gates.</span></div>
+      <button class="btn ghost" id="proposals-refresh-btn" style="width:100%; margin-top:10px;">Refresh proposals</button>
+    </div>
+    <div class="panel" style="grid-column:1 / -1;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h3>Capital Calls</h3>
+          <div class="cap">Obligations read from notices, awaiting your decision</div>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <span id="capital-calls-overdue-badge" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber);display:none;"></span>
+          <button class="btn ghost" id="capital-calls-refresh-btn">Refresh calls</button>
+        </div>
+      </div>
+      <div id="capital-calls-list" class="field-list"><span class="cap">Connect, then record a capital call notice below to start the queue.</span></div>
+      <div style="border:1px dashed var(--line); border-radius:6px; padding:12px; margin-top:12px;">
+        <div class="cap" style="margin-bottom:8px;">Record a capital call notice for the current instrument. Funders are matched against the investor registry by name at creation &#8212; create the investor first, then record the call.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:2; min-width:150px;"><label>Funder name</label><input type="text" id="cc-funder-name" placeholder="e.g. Dana / Ghost LP" style="min-width:0; width:100%;" /></div>
+          <div class="field" style="flex:1; min-width:110px;"><label>Owing (USD)</label><input type="number" id="cc-capital-owing" placeholder="500000" min="0" step="0.01" style="min-width:0; width:100%;" /></div>
+          <div class="field" style="flex:1; min-width:150px;"><label>Due date</label><input type="date" id="cc-due-date" style="min-width:0; width:100%;" /></div>
+          <button class="btn" id="create-capital-call-btn">Create call</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let API_BASE = "";
+let API_KEY = "";
+let selectedMode = "traditional";
+let currentInstrumentId = null;
+let lastDocText = "";
+let uploadedFile = null;
+
+const EXAMPLES = {
+  "Clean loan": { mode: "traditional", text: `LOAN AGREEMENT
+Borrower: Alpha Manufacturing Sdn Bhd
+Lender: Meridian Bank Ltd
+Principal: USD 2,500,000
+Interest Rate: 6.5%
+Repayment: quarterly amortization over 5 years
+Maturity Date: 2029-12-31
+Governing Law: English law` },
+  "Sukuk (al-Ijara)": { mode: "islamic", text: `SUKUK CERTIFICATE
+Issuer: Petra Energy Sukuk SPV
+Total Issue Size: USD 500,000,000
+Structure: al-Ijara
+Underlying Asset: a portfolio of income-generating logistics warehouses
+Profit Rate: 4.25% per annum
+Shariah Committee: Approved per fatwa reference FA-2024-011` },
+  "Missing evidence": { mode: "islamic", text: `SUKUK CERTIFICATE
+Issuer: Desert Rose Holdings SPV
+Total Issue Size: USD 40,000,000
+Structure: Murabaha
+Profit Rate: 5.1% per annum` }
+};
+
+function showError(msg) {
+  const box = document.getElementById("error-box");
+  box.textContent = msg;
+  box.classList.add("show");
+}
+function hideError() {
+  document.getElementById("error-box").classList.remove("show");
+}
+
+document.getElementById("conn-toggle").onclick = () => {
+  document.getElementById("settings").classList.toggle("open");
+};
+document.getElementById("connect-btn").onclick = async () => {
+  API_BASE = document.getElementById("api-base").value.trim().replace(/\/$/, "");
+  API_KEY = document.getElementById("api-key").value.trim();
+  const dot = document.getElementById("conn-dot");
+  const text = document.getElementById("conn-text");
+  try {
+    const r = await fetch(`${API_BASE}/health`);
+    if (r.ok) {
+      dot.className = "conn-dot ok";
+      text.textContent = "connected";
+      document.getElementById("settings").classList.remove("open");
+    } else {
+      throw new Error("health check failed");
+    }
+  } catch (e) {
+    dot.className = "conn-dot bad";
+    text.textContent = "connection failed";
+  }
+};
+
+document.getElementById("mode-traditional").onclick = () => {
+  selectedMode = "traditional";
+  document.getElementById("mode-traditional").classList.add("active");
+  document.getElementById("mode-islamic").classList.remove("active");
+};
+document.getElementById("mode-islamic").onclick = () => {
+  selectedMode = "islamic";
+  document.getElementById("mode-islamic").classList.add("active");
+  document.getElementById("mode-traditional").classList.remove("active");
+};
+
+document.getElementById("tab-paste").onclick = () => {
+  document.getElementById("tab-paste").classList.add("active");
+  document.getElementById("tab-upload").classList.remove("active");
+  document.getElementById("paste-area").style.display = "block";
+  document.getElementById("upload-area").style.display = "none";
+};
+document.getElementById("tab-upload").onclick = () => {
+  document.getElementById("tab-upload").classList.add("active");
+  document.getElementById("tab-paste").classList.remove("active");
+  document.getElementById("paste-area").style.display = "none";
+  document.getElementById("upload-area").style.display = "block";
+};
+document.getElementById("file-input").onchange = (e) => {
+  if (e.target.files[0]) {
+    uploadedFile = e.target.files[0];
+    document.getElementById("file-name").textContent = uploadedFile.name;
+  }
+};
+
+async function apiCall(path, opts) {
+  const headers = {};
+  if (!(opts && opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  headers["X-API-Key"] = API_KEY;
+  const r = await fetch(`${API_BASE}${path}`, { ...opts, headers: { ...headers, ...(opts && opts.headers) } });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.detail || `Request to ${path} failed (${r.status})`);
+  }
+  return r.json();
+}
+
+function resetSteps() {
+  document.querySelectorAll(".step").forEach((s) => {
+    s.classList.remove("active", "done");
+  });
+}
+function setStep(name, state) {
+  const el = document.querySelector(`.step[data-step="${name}"]`);
+  if (!el) return;
+  el.classList.remove("active", "done");
+  el.classList.add(state);
+}
+
+async function runProcessing() {
+  hideError();
+  if (!API_BASE || !API_KEY) {
+    showError("Connect to an API instance first (top right).");
+    return;
+  }
+  const text = document.getElementById("doc-text").value.trim();
+  if (!text && !uploadedFile) {
+    showError("Paste a document or upload a file first.");
+    return;
+  }
+  lastDocText = text;
+
+  resetSteps();
+  document.getElementById("fields-list").innerHTML = "";
+  document.getElementById("checklist").innerHTML = "";
+  document.getElementById("ledger-list").innerHTML = "";
+  document.getElementById("last-result").innerHTML = '<span class="cap">Processing...</span>';
+  document.getElementById("fix-row").style.display = "none";
+
+  const start = performance.now();
+  const timerEl = document.getElementById("timer");
+  const iv = setInterval(() => {
+    timerEl.textContent = `${((performance.now() - start) / 1000).toFixed(1)}s elapsed`;
+  }, 80);
+
+  try {
+    setStep("classify", "active");
+    const instrument = await apiCall("/instruments", {
+      method: "POST",
+      body: JSON.stringify({
+        transaction_type: selectedMode === "islamic" ? "sukuk" : "loan",
+        compliance_mode: selectedMode,
+        issuer_name: "Demo Issuer",
+        issuer_type: "Corporate",
+        amount: 1000000,
+        currency: "USD",
+      }),
+    });
+    currentInstrumentId = instrument.id;
+    setStep("classify", "done");
+
+    setStep("extract", "active");
+    let runResult;
+    if (uploadedFile) {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      formData.append("filename", uploadedFile.name);
+      runResult = await apiCall(`/instruments/${instrument.id}/documents/upload`, {
+        method: "POST",
+        body: formData,
+      });
+    } else {
+      runResult = await apiCall(`/instruments/${instrument.id}/documents`, {
+        method: "POST",
+        body: JSON.stringify({ text, filename: "live-demo.txt" }),
+      });
+    }
+    // Uploads return the text the system actually read -- keep it so the
+    // attach-fatwa-and-recheck flow can re-run without re-uploading.
+    lastDocText = runResult.extracted_text || text;
+    setStep("extract", "done");
+
+    setStep("compliance", "active");
+    setStep("compliance", "done");
+
+    setStep("ledger", "active");
+    const ledger = await apiCall(`/instruments/${instrument.id}/ledger`);
+    setStep("ledger", "done");
+
+    clearInterval(iv);
+    const total = (performance.now() - start) / 1000;
+    timerEl.textContent = `completed in ${total.toFixed(2)}s`;
+
+    renderResults(runResult, ledger);
+
+    // If the document cleared both confidence gates, prepare its cap-table
+    // proposal (inert until a human approves it in the proposals panel).
+    // A 409 here is normal -- only equity/subscription documents with
+    // issuer + share count can seed a proposal.
+    if (runResult.document && runResult.document.status === "processed") {
+      try {
+        await apiCall(`/documents/${runResult.document.id}/cap-table-proposal`, {
+          method: "POST",
+        });
+      } catch (_) { /* not proposal-eligible -- nothing to show */ }
+      refreshProposals();
+      refreshCapitalCalls();
+    }
+  } catch (e) {
+    clearInterval(iv);
+    showError(e.message || "Something went wrong.");
+  }
+}
+
+document.getElementById("run-btn").onclick = () => {
+  hideError();
+  const runBtn = document.getElementById("run-btn");
+  runBtn.disabled = true;
+  runProcessing().finally(() => {
+    runBtn.disabled = false;
+  });
+};
+
+document.getElementById("fix-btn").onclick = async () => {
+  hideError();
+  if (!currentInstrumentId) return;
+  const fixBtn = document.getElementById("fix-btn");
+  fixBtn.disabled = true;
+  fixBtn.textContent = "Attaching evidence...";
+  try {
+    await apiCall(`/instruments/${currentInstrumentId}/evidence`, {
+      method: "POST",
+      body: JSON.stringify({
+        text: "Fatwa: the structure described is reviewed and approved as Shariah-compliant by the Shariah Supervisory Board, consistent with the referenced fatwa.",
+        document_type: "fatwa",
+        filename: "fatwa-evidence.pdf",
+      }),
+    });
+    setStep("classify", "active");
+    const runResult = await apiCall(`/instruments/${currentInstrumentId}/documents`, {
+      method: "POST",
+      body: JSON.stringify({ text: lastDocText, filename: "live-demo.txt" }),
+    });
+    setStep("classify", "done");
+    const ledger = await apiCall(`/instruments/${currentInstrumentId}/ledger`);
+    renderResults(runResult, ledger);
+  } catch (e) {
+    showError(e.message || "Could not attach evidence.");
+  } finally {
+    fixBtn.disabled = false;
+    fixBtn.textContent = "Attach the missing fatwa & re-check";
+  }
+};
+
+// Renders the pipeline response into the dashboard panels. Called after
+// every document run and after the attach-fatwa-and-recheck flow.
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderResults(runResult, ledger) {
+  const doc = runResult.document || {};
+  const inst = runResult.instrument || {};
+  const outcome = runResult.outcome;
+  const islamic = (inst.compliance_mode || selectedMode) === "islamic";
+  const pct = (v) => (v != null ? (v * 100).toFixed(0) + "%" : "\u2014");
+
+  // --- Extracted fields (with visible confidence) ---
+  // Honest split: rows below the "Deal container" divider are the placeholder
+  // settings this page created to hold the run -- NOT values read from the
+  // document. When the document is unclassified, nothing was extracted, so
+  // document-derived rows say so instead of implying content that isn't there.
+  const unclassified =
+    !doc.document_type ||
+    doc.document_type === "unclassified" ||
+    !doc.extraction_confidence;
+  const NOT_EXTRACTED = "\u2014 not extracted (document unclassified)";
+  const fields = [
+    ["Document type", doc.document_type],
+    ["Source", uploadedFile ? uploadedFile.name : "pasted text"],
+    ["Classification confidence", pct(doc.classification_confidence)],
+    ["Extraction confidence", pct(doc.extraction_confidence)],
+  ];
+  if (runResult.pages_total != null) {
+    fields.push([
+      "Pages parsed",
+      runResult.pages_read >= runResult.pages_total
+        ? "all " + runResult.pages_total + " pages"
+        : "first " + runResult.pages_read + " of " + runResult.pages_total + " pages (processing limit)",
+    ]);
+  }
+  if (unclassified) {
+    fields.push(["Contract type", NOT_EXTRACTED]);
+    fields.push(["Underlying asset", NOT_EXTRACTED]);
+    fields.push(["Issuer", NOT_EXTRACTED]);
+    fields.push(["Amount", NOT_EXTRACTED]);
+  } else {
+    fields.push(["Contract type", inst.shariah_contract_type]);
+    fields.push(["Underlying asset", inst.underlying_asset_description]);
+    const extractionGate = 0.85;
+    const extractionCleared = (doc.extraction_confidence || 0) >= extractionGate;
+    fields.push(["__divider__",
+      extractionCleared
+        ? "Deal container (values from the document where extracted)"
+        : "Deal container (creation settings \u2014 unchanged: extraction below the 85% gate)"]);
+    fields.push(["Issuer", inst.issuer_name]);
+    fields.push(["Transaction", inst.transaction_type]);
+    fields.push(["Amount", inst.amount != null ? Number(inst.amount).toLocaleString() + " " + (inst.currency || "USD") : null]);
+  }
+  // Routing status: the pipeline routes to human review whenever
+  // classification or extraction misses its confidence gate. That is the
+  // *intended* outcome for documents it cannot read confidently -- say so
+  // explicitly instead of leaving the dashboard silent about it.
+  const routed = runResult.routed_to_review === true || (doc.status || "").toLowerCase() === "review_needed";
+  const fl = document.getElementById("fields-list");
+  fl.innerHTML = "";
+  if (routed) {
+    const note = document.createElement("div");
+    note.className = "check fail";
+    note.style.marginBottom = "10px";
+    note.innerHTML =
+      '<span class="mark">!</span><span class="text"><b>Routed to human review.</b> ' +
+      "The pipeline could not read this document confidently, so nothing was " +
+      "written to the deal container \u2014 it is flagged for review, not guessed.</span>";
+    fl.appendChild(note);
+  }
+  if (unclassified) {
+    const note = document.createElement("div");
+    note.className = "check fail";
+    note.style.marginBottom = "10px";
+    note.innerHTML =
+      '<span class="mark">i</span><span class="text">This document didn\u2019t clear the 75% classification gate \u2014 ' +
+      'no fields were extracted. It is flagged for human review, not guessed. ' +
+      "(A base prospectus is a hybrid document; connect an Anthropic API key for LLM classification of mixed types.)</span>";
+    fl.appendChild(note);
+  }
+  fields.forEach(([k, v]) => {
+    if (v == null || v === "") return;
+    const row = document.createElement("div");
+    row.className = "field-item";
+    if (k === "__divider__") {
+      row.style.cssText = "border-bottom:none;padding-top:12px;";
+      row.innerHTML = '<span class="k" style="color:var(--teal-soft);text-transform:uppercase;letter-spacing:.05em;">' + esc(v) + '</span><span class="v"></span>';
+      fl.appendChild(row);
+      return;
+    }
+    const isConf = String(k).indexOf("confidence") !== -1;
+    row.innerHTML = '<span class="k">' + esc(k) + '</span><span class="v' + (isConf ? " conf" : "") + '">' + esc(v) + "</span>";
+    fl.appendChild(row);
+  });
+
+  // --- Compliance findings checklist. For Islamic mode the checks mirror
+  // the real ISLAMIC_RULES; for traditional they reflect the gateway
+  // outcome (the API exposes the outcome, not raw per-rule results). ---
+  const checks = [];
+  checks.push({
+    ok: !!doc.document_type && doc.document_type !== "unclassified",
+    text: doc.document_type ? "Classified as " + doc.document_type : "Document classified",
+  });
+  checks.push({
+    ok: doc.classification_confidence != null && doc.classification_confidence >= 0.75,
+    text: "Classification confidence " + pct(doc.classification_confidence) + " (gate 75%)",
+  });
+  checks.push({
+    ok: doc.extraction_confidence != null && doc.extraction_confidence >= 0.85,
+    text: "Extraction confidence " + pct(doc.extraction_confidence) + " (gate 85%)",
+  });
+  if (islamic) {
+    checks.push({
+      ok: !!inst.shariah_contract_type,
+      text: inst.shariah_contract_type ? "Contract type declared: " + inst.shariah_contract_type : "Contract type declared",
+    });
+    checks.push({
+      ok: !!inst.underlying_asset_description,
+      text: inst.underlying_asset_description ? "Asset backing identified" : "Asset backing identified",
+    });
+    checks.push({ ok: outcome !== "system_flagged_noncompliant", text: "No riba / speculative indicators detected" });
+  } else {
+    checks.push({ ok: outcome === "not_applicable", text: "KYC / counterparty documentation present" });
+    checks.push({ ok: outcome === "not_applicable", text: "Rate within sanity bounds" });
+  }
+  const cl = document.getElementById("checklist");
+  cl.innerHTML = "";
+  checks.forEach((c) => {
+    const item = document.createElement("div");
+    item.className = "check " + (c.ok ? "pass" : "fail");
+    item.innerHTML = '<span class="mark">' + (c.ok ? "\u2713" : "!") + '</span><span class="text">' + esc(c.text) + "</span>";
+    cl.appendChild(item);
+  });
+
+  // --- Outcome message + fix flow ---
+  const desc = document.getElementById("compliance-desc");
+  const fixRow = document.getElementById("fix-row");
+  if (outcome === "system_flagged_noncompliant") {
+    desc.textContent = islamic
+      ? "Blocked: blocking findings detected (e.g. missing fatwa evidence). Human review required \u2014 never auto-approved."
+      : "Blocked: compliance findings failed. Fix the document or provide missing evidence.";
+    fixRow.style.display = islamic ? "block" : "none";
+  } else if (outcome === "pending_scholar_review") {
+    desc.textContent = "Structurally clean \u2014 pending Shariah scholar review. Never auto-approved; a human confirms.";
+    fixRow.style.display = "none";
+  } else {
+    desc.textContent = "Passed all " + (islamic ? "Islamic" : "traditional") + " rules. No Shariah review required on this track.";
+    fixRow.style.display = "none";
+  }
+
+  // --- Audit trail ---
+  const ll = document.getElementById("ledger-list");
+  ll.innerHTML = "";
+  (ledger || []).forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "timeline-item";
+    const payload = entry.payload ? Object.entries(entry.payload).map(([k, v]) => k + ": " + v).join(" \u00b7 ") : "";
+    const when = entry.recorded_at || entry.created_at;
+    item.innerHTML =
+      '<div class="timeline-dot"></div><div><div class="timeline-text mono">' + esc(entry.entry_type) + "</div>" +
+      (payload ? '<div class="timeline-text sub">' + esc(payload) + "</div>" : "") +
+      (when ? '<div class="timeline-text sub">' + esc(String(when).replace("T", " ").slice(0, 19)) + "</div>" : "") +
+      "</div>";
+    ll.appendChild(item);
+  });
+
+  // --- Sidebar summary ---
+  document.getElementById("last-result").innerHTML =
+    '<div class="stat-row"><span class="k">Type</span><span class="v">' + esc(doc.document_type || "\u2014") + "</span></div>" +
+    '<div class="stat-row"><span class="k">Extraction</span><span class="v">' + pct(doc.extraction_confidence) + "</span></div>" +
+    '<div class="stat-row"><span class="k">Outcome</span><span class="v">' + esc(outcome || "\u2014") + "</span></div>";
+}
+
+// --------------------------------------------------------------------- //
+// Live cap table demo -- Series A round, real API
+// --------------------------------------------------------------------- //
+// --------------------------------------------------------------------- //
+// Live cap table demo -- Series A round, real API
+// --------------------------------------------------------------------- //
+
+// Per-page-load unique issuer: the demo re-seeds on every reload against a
+// persistent database, so a fixed name would accumulate duplicate founders,
+// securities and events on the second visit and show wrong ownership math.
+const CT_ISSUER = "Demo Acme Inc " + Date.now().toString().slice(-8);
+let ctFounderId = null, ctVcId = null, ctCommonId = null, ctPreferredId = null;
+let ctBeforeIso = null, ctAfterIso = null;
+
+function ctRender() {
+  const bar = document.getElementById("ownership-bar");
+  const legend = document.getElementById("ownership-legend");
+  const total = document.getElementById("ct-total");
+  bar.innerHTML = '<div style="flex:1;display:flex;align-items:center;justify-content:center;font-family:IBM Plex Mono,monospace;font-size:12px;color:var(--sand);">Click "Set up a demo company" to begin.</div>';
+  legend.innerHTML = "";
+  total.textContent = "\u2014";
+}
+ctRender();
+
+document.getElementById("ct-seed-hint").onclick = () => {
+  document.getElementById("captable-setup-btn").click();
+};
+
+document.getElementById("captable-setup-btn").onclick = async () => {
+  if (!API_BASE || !API_KEY) return;
+  const btn = document.getElementById("captable-setup-btn");
+  btn.disabled = true;
+  btn.textContent = "Setting up...";
+  try {
+    const founder = await apiCall("/investors", { method: "POST", body: JSON.stringify({ name: "Founder", investor_type: "individual" }) });
+    ctFounderId = founder.id;
+    const vc = await apiCall("/investors", { method: "POST", body: JSON.stringify({ name: "Series A Fund", investor_type: "institution" }) });
+    ctVcId = vc.id;
+    const common = await apiCall("/securities", { method: "POST", body: JSON.stringify({ issuer_name: CT_ISSUER, name: "Common Stock", security_type: "common", authorized_shares: 10000000 }) });
+    ctCommonId = common.id;
+    const preferred = await apiCall("/securities", { method: "POST", body: JSON.stringify({ issuer_name: CT_ISSUER, name: "Series A Preferred", security_type: "preferred", authorized_shares: 5000000 }) });
+    ctPreferredId = preferred.id;
+    const now = Date.now();
+    ctBeforeIso = new Date(now - 200 * 86400000).toISOString();
+    ctAfterIso = new Date(now - 100 * 86400000).toISOString();
+    await apiCall("/cap-table-events", { method: "POST", body: JSON.stringify({ security_id: ctCommonId, event_type: "issuance", holder_id: ctFounderId, quantity: 8000000, effective_date: ctBeforeIso }) });
+    btn.textContent = "Setup complete";
+    document.getElementById("captable-round-btn").disabled = false;
+    ctRender();
+    const midIso = new Date(new Date(ctBeforeIso).getTime() + 25 * 86400000).toISOString();
+    const data = await apiCall("/cap-table/" + encodeURIComponent(CT_ISSUER) + "?as_of=" + encodeURIComponent(midIso));
+    renderCapTable(data);
+  } catch (e) {
+    showError(e.message || "Setup failed.");
+    btn.disabled = false;
+    btn.textContent = "1. Set up a demo company";
+  }
+};
+
+
+document.getElementById("captable-round-btn").onclick = async () => {
+  if (!API_BASE || !API_KEY) return;
+  const btn = document.getElementById("captable-round-btn");
+  btn.disabled = true;
+  btn.textContent = "Running Series A...";
+  try {
+    await apiCall("/cap-table-events", { method: "POST", body: JSON.stringify({ security_id: ctPreferredId, event_type: "issuance", holder_id: ctVcId, quantity: 2000000, price_per_share: 5.0, effective_date: ctAfterIso }) });
+    btn.textContent = "Series A complete";
+    const afterBtn = document.getElementById("ct-view-after");
+    afterBtn.disabled = false;
+    afterBtn.classList.add("active");
+    document.getElementById("ct-view-before").classList.remove("active");
+    const data = await apiCall("/cap-table/" + encodeURIComponent(CT_ISSUER));
+    renderCapTable(data);
+  } catch (e) {
+    showError(e.message || "Could not record the round.");
+    btn.disabled = false;
+    btn.textContent = "2. Run a Series A round";
+  }
+};
+
+document.getElementById("ct-view-before").onclick = async () => {
+  if (!ctBeforeIso) return; // no demo company set up yet — avoid a bogus 1970 as_of fetch
+  document.getElementById("ct-view-before").classList.add("active");
+  document.getElementById("ct-view-after").classList.remove("active");
+  try {
+    const midIso = new Date(new Date(ctBeforeIso).getTime() + 25 * 86400000).toISOString();
+    const data = await apiCall("/cap-table/" + encodeURIComponent(CT_ISSUER) + "?as_of=" + encodeURIComponent(midIso));
+    renderCapTable(data);
+  } catch (e) { showError(e.message); }
+};
+
+document.getElementById("ct-view-after").onclick = async () => {
+  if (document.getElementById("ct-view-after").disabled) return;
+  document.getElementById("ct-view-after").classList.add("active");
+  document.getElementById("ct-view-before").classList.remove("active");
+  try {
+    const data = await apiCall("/cap-table/" + encodeURIComponent(CT_ISSUER));
+    renderCapTable(data);
+  } catch (e) { showError(e.message); }
+};
+
+
+// --------------------------------------------------------------------- //
+// Cap table proposals -- the human approval gate, in the UI
+// --------------------------------------------------------------------- //
+// A proposal is the inert bridge between an extracted document and the
+// cap table: approving it writes the real CapTableEvent (and the issuer's
+// live cap table is rendered below), rejecting it writes nothing but the
+// audit trail. Both decisions require a named reviewer.
+let proposalsPayloadById = {};
+
+async function refreshProposals() {
+  if (!API_BASE || !API_KEY) return;
+  const list = document.getElementById("proposals-list");
+  try {
+    const proposals = await apiCall("/cap-table-proposals");
+    // The investor picker needs the real investor registry -- a holder on a
+    // cap-table event must always be an existing Investor row.
+    let investors = [];
+    let investorsError = null;
+    const needsInvestors = proposals.some((p) => p.status === "proposed");
+    if (needsInvestors) {
+      try {
+        investors = await apiCall("/investors");
+      } catch (e) {
+        investorsError = e;
+      }
+    }
+    proposalsPayloadById = {};
+    if (!proposals.length) {
+      list.innerHTML = '<span class="cap">No proposals yet. Process an equity/subscription document that clears both confidence gates.</span>';
+      return;
+    }
+    // Inline registry form: creating the holder used to require the
+    // browser console. It lives here (not in the sidebar) because it is
+    // part of the review workflow, and it re-renders the queue right
+    // after creating so the new investor is immediately linkable.
+    const anyPending = proposals.some((p) => p.status === "proposed");
+    const createForm = anyPending
+      ? '<div style="border:1px dashed var(--line); border-radius:6px; padding:12px; margin-bottom:12px;">'
+        + '<div class="cap" style="margin-bottom:8px;">Holder not in the registry yet? Create the investor here, then link them on the proposal below.</div>'
+        + '<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">'
+        + '<div class="field" style="flex:2; min-width:160px;"><label>Investor name</label><input type="text" id="new-investor-name" placeholder="e.g. Dana" style="min-width:0; width:100%;" /></div>'
+        + '<div class="field" style="flex:1; min-width:120px;"><label>Type</label><select id="new-investor-type" style="background:var(--ink); border:1px solid var(--line); color:var(--paper); padding:8px 10px; border-radius:4px; font-family:var(--mono); font-size:13px;"><option value="individual">individual</option><option value="institution">institution</option><option value="fund">fund</option></select></div>'
+        + '<button class="btn" id="create-investor-btn">Create investor</button>'
+        + "</div>"
+        + "</div>"
+      : "";
+    list.innerHTML = createForm + proposals.map((p) => {
+      const d = p.payload || {};
+      proposalsPayloadById[p.id] = d;
+      const pending = p.status === "proposed";
+      const unresolved = pending && d.subscriber_unresolved;
+      const rows = [
+        ["Issuer", d.issuer_name],
+        ["Security", d.security_name],
+        ["Holder", d.holder_name || (d.subscriber_unresolved ? "(unresolved -- extraction never identified the subscriber)" : null)],
+        ["Shares", d.share_count != null ? Number(d.share_count).toLocaleString() : null],
+        ["Price / share", d.price_per_share],
+        ["Amount", d.amount != null && d.currency ? Number(d.amount).toLocaleString() + " " + d.currency : null],
+      ].filter(([, v]) => v != null && v !== "")
+        .map(([k, v]) => '<div class="stat-row"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + "</span></div>")
+        .join("");
+      const flags = d.provisional_investor_created ? '<div class="cap" style="margin-top:6px;">Note: holder is a PROVISIONAL investor created by the extraction -- confirm the identity.</div>' : "";
+      // Unresolved subscriber: the reviewer must link a real investor before
+      // approval is possible (the API 409s otherwise). The picker lists the
+      // existing investor registry; approving stays disabled until resolved.
+      // Three states: fetch failed -> loud error; empty registry -> guidance +
+      // inline create form below; otherwise the picker. An empty dropdown
+      // can no longer silently mean "the fetch broke".
+      const linkControl = unresolved
+        ? (investorsError
+          ? '<div class="err" style="margin-top:10px;">Could not load the investor registry (' + esc(investorsError.message || 'request failed') + '). Reconnect (top right) and click Refresh proposals.</div>'
+          : (investors.length === 0
+            ? '<div class="cap" style="margin-top:10px;">No investors exist on this server yet. Create one with the form above, then link it here.</div>'
+            : '<div style="display:flex; gap:8px; margin-top:10px; align-items:center;">'
+          + '<select data-investor-select="' + esc(p.id) + '" style="flex:1; padding:6px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px;">'
+          + '<option value="">-- link a real investor --</option>'
+          + investors.map((inv) => '<option value="' + esc(inv.id) + '">' + esc(inv.name) + " (" + esc(inv.investor_type) + ")</option>").join("")
+          + "</select>"
+          + '<button class="btn" data-link="' + esc(p.id) + '">Link investor</button>'
+          + "</div>"
+          + '<div class="cap" style="margin-top:6px;">Extraction never identified the subscriber from the document. Link the real investor before approving -- no guessed holder can enter the cap table.</div>'
+            ))
+        : "";
+      const buttons = pending
+        ? '<div style="display:flex; gap:8px; margin-top:10px;">'
+          + '<button class="btn" data-approve="' + esc(p.id) + '"' + (unresolved ? ' disabled title="Link a real investor first -- the subscriber is unresolved."' : "") + ">Approve & write to cap table</button>"
+          + '<button class="btn ghost" data-reject="' + esc(p.id) + '">Reject</button>'
+          + "</div>"
+        : "";
+      const badge = pending
+        ? '<span style="color:var(--amber);">PENDING DECISION</span>'
+        : '<span style="color:var(--sand);">' + esc(p.status.toUpperCase()) + "</span>";
+      return '<div style="border:1px solid var(--line); border-radius:6px; padding:12px; margin-bottom:10px;">'
+        + '<div class="cap">' + esc(p.proposal_type) + ' \u00b7 ' + badge + "</div>"
+        + rows + flags + linkControl + buttons + "</div>";
+    }).join("");
+    list.querySelectorAll("[data-approve]").forEach((b) => { b.onclick = () => decideProposal(b.dataset.approve, true); });
+    list.querySelectorAll("[data-reject]").forEach((b) => { b.onclick = () => decideProposal(b.dataset.reject, false); });
+    const createBtn = document.getElementById("create-investor-btn");
+    if (createBtn) {
+      createBtn.onclick = async () => {
+        const nameInput = document.getElementById("new-investor-name");
+        const typeInput = document.getElementById("new-investor-type");
+        const invName = (nameInput && nameInput.value || "").trim();
+        if (!invName) { showError("Type an investor name first."); return; }
+        try {
+          await apiCall("/investors", { method: "POST", body: JSON.stringify({ name: invName, investor_type: (typeInput && typeInput.value) || "individual" }) });
+          await refreshProposals();
+        } catch (e) { showError(e.message || "Could not create the investor."); }
+      };
+    }
+    list.querySelectorAll("[data-link]").forEach((b) => {
+      b.onclick = async () => {
+        const proposalId = b.dataset.link;
+        const select = list.querySelector('[data-investor-select="' + proposalId + '"]');
+        const investorId = select ? select.value : "";
+        if (!investorId) { showError("Pick an investor from the dropdown first."); return; }
+        const reviewer = (prompt("Your name (recorded as the reviewer on this link):") || "").trim();
+        if (!reviewer) return; // a named reviewer is required, no silent edits
+        try {
+          await apiCall(`/cap-table-proposals/${proposalId}/link-investor?investor_id=${encodeURIComponent(investorId)}&reviewer=${encodeURIComponent(reviewer)}`, { method: "POST" });
+          await refreshProposals();
+        } catch (e) { showError(e.message); }
+      };
+    });
+  } catch (e) {
+    list.innerHTML = "";
+    showError(e.message || "Could not load proposals.");
+  }
+}
+
+async function decideProposal(proposalId, approve) {
+  const reviewer = (prompt("Your name (recorded as the reviewer on this decision):") || "").trim();
+  if (!reviewer) return; // a named reviewer is required, no silent decisions
+  try {
+    if (approve) {
+      await apiCall(`/cap-table-proposals/${proposalId}/approve?reviewer=${encodeURIComponent(reviewer)}`, { method: "POST" });
+      // Show the shares landing: render the issuer's live cap table in the
+      // Cap Table panel, exactly what /cap-table/{issuer} replays.
+      const d = proposalsPayloadById[proposalId] || {};
+      if (d.issuer_name) {
+        const data = await apiCall("/cap-table/" + encodeURIComponent(d.issuer_name));
+        renderCapTable(data);
+      }
+    } else {
+      await apiCall(`/cap-table-proposals/${proposalId}/reject?reviewer=${encodeURIComponent(reviewer)}`, { method: "POST" });
+    }
+    await refreshProposals();
+  } catch (e) {
+    showError(e.message || "Could not record the decision.");
+  }
+}
+
+document.getElementById("proposals-refresh-btn").onclick = refreshProposals;
+
+// --------------------------------------------------------------------- //
+// Capital calls -- obligation queue (Phase A panel)
+// --------------------------------------------------------------------- //
+// Calls are cash obligations, not ownership facts: they live in their own
+// table and go through their own gate. A call stays PENDING_APPROVAL until a
+// named human reviewer decides; approving a call with no resolved funder
+// (no investor row) is impossible -- the API 409s, mirroring the subscriber
+// guard on proposals. Funders are matched against the investor registry by
+// name at creation time, so unresolved calls need the investor created first.
+
+async function refreshCapitalCalls() {
+  if (!API_BASE || !API_KEY) return;
+  const list = document.getElementById("capital-calls-list");
+  const badge = document.getElementById("capital-calls-overdue-badge");
+  try {
+    const calls = await apiCall("/capital-calls");
+    if (!calls.length) {
+      list.innerHTML = '<span class="cap">No capital calls yet. Record a notice below to start the queue.</span>';
+      badge.style.display = "none";
+      return;
+    }
+    // B2: overdue badge -- calls whose due date passed while still pending.
+    let overdueCount = 0;
+    try {
+      overdueCount = (await apiCall("/capital-calls/overdue")).length;
+    } catch (_) { /* badge is cosmetic -- never block the queue on it */ }
+    if (overdueCount > 0) {
+      badge.style.display = "inline";
+      badge.textContent = overdueCount + (overdueCount === 1 ? " call overdue" : " calls overdue");
+    } else {
+      badge.style.display = "none";
+    }
+    list.innerHTML = calls.map((c) => {
+      const pending = c.status === "pending_approval";
+      const unresolved = pending && !c.funder_id;
+      const fmt = (n) => (n != null ? Number(n).toLocaleString() : "—");
+      const fmtDate = (d) => (d ? String(d).replace("T", " ").slice(0, 10) : "—");
+      const rows = [
+        ["Funder", c.funder_name
+          || (c.funder_id ? "(linked -- registry name lookup failed)" : "(unresolved -- no investor row)")],
+        ["Owing", fmt(c.capital_owing) + " " + (c.currency || "USD")],
+        ["Due", fmtDate(c.due_date)],
+        ["Manual review", c.requires_manual_review ? "reviewer check required" : "auto-clear"],
+      ].filter(([, v]) => v != null && v !== "")
+        .map(([k, v]) => '<div class="stat-row"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + "</span></div>")
+        .join("");
+      const unresolvedNote = unresolved
+        ? '<div class="cap" style="margin-top:6px; color:var(--amber);">No funder to approve: the system could not match a registry investor by name at creation. Create the investor (Cap Table Proposals panel) and re-record the call.</div>'
+        : "";
+      const buttons = pending
+        ? '<div style="display:flex; gap:8px; margin-top:10px;">'
+          + '<button class="btn" data-approve-cc="' + esc(c.id) + '"' + (unresolved ? ' disabled title="This call has no resolved funder -- the API rejects approval."' : "") + ">Approve</button>"
+          + '<button class="btn ghost" data-reject-cc="' + esc(c.id) + '">Reject</button>'
+          + "</div>"
+        : "";
+      const stateBadge = pending
+        ? '<span style="color:var(--amber);">PENDING DECISION</span>'
+        : '<span style="color:var(--sand);">' + esc(c.status.toUpperCase()) + "</span>";
+      return '<div style="border:1px solid var(--line); border-radius:6px; padding:12px; margin-bottom:10px;">'
+        + '<div class="cap">capital_call_notice &middot; ' + stateBadge + "</div>"
+        + rows + unresolvedNote + buttons + "</div>";
+    }).join("");
+    list.querySelectorAll("[data-approve-cc]").forEach((b) => { b.onclick = () => decideCapitalCall(b.dataset.approveCc, "approve"); });
+    list.querySelectorAll("[data-reject-cc]").forEach((b) => { b.onclick = () => decideCapitalCall(b.dataset.rejectCc, "reject"); });
+  } catch (e) {
+    list.innerHTML = "";
+    showError(e.message || "Could not load capital calls.");
+  }
+}
+
+async function decideCapitalCall(callId, action) {
+  const reviewer = (prompt("Your name (recorded as the reviewer on this decision):") || "").trim();
+  if (!reviewer) return; // a named reviewer is required, no silent decisions
+  try {
+    await apiCall(`/capital-calls/${callId}/review`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer, action }),
+    });
+    await refreshCapitalCalls();
+  } catch (e) { showError(e.message || "Could not record the decision."); }
+}
+
+document.getElementById("capital-calls-refresh-btn").onclick = refreshCapitalCalls;
+
+document.getElementById("create-capital-call-btn").onclick = async () => {
+  if (!API_BASE || !API_KEY) { showError("Connect to an API instance first (top right)."); return; }
+  if (!currentInstrumentId) { showError("Process a document first -- the call is recorded against the current instrument."); return; }
+  const funderName = document.getElementById("cc-funder-name").value.trim();
+  const owing = parseFloat(document.getElementById("cc-capital-owing").value);
+  const dueInput = document.getElementById("cc-due-date").value;
+  const btn = document.getElementById("create-capital-call-btn");
+  if (!funderName) { showError("Type the funder name as it appears in the registry (if it exists)."); return; }
+  if (!(owing > 0)) { showError("Enter a positive capital owing amount."); return; }
+  btn.disabled = true;
+  btn.textContent = "Creating...";
+  try {
+    await apiCall(`/instruments/${currentInstrumentId}/capital-calls`, {
+      method: "POST",
+      body: JSON.stringify({
+        funder_name: funderName,
+        currency: "USD",
+        capital_owing: owing,
+        due_date: dueInput ? dueInput + "T00:00:00" : null,
+        wire_details: "",
+        source_text: "Capital Call Notice (recorded from the demo panel)",
+      }),
+    });
+    await refreshCapitalCalls();
+  } catch (e) {
+    showError(e.message || "Could not create the capital call.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Create call";
+  }
+};
+
+function renderCapTable(data) {
+  const colors = ["gold","teal","ember","sand"];
+  const bar = document.getElementById("ownership-bar");
+  const legend = document.getElementById("ownership-legend");
+  const total = document.getElementById("ct-total");
+  bar.innerHTML = "";
+  legend.innerHTML = "";
+  const byHolder = {};
+  data.positions.forEach((p) => {
+    byHolder[p.holder_id] = byHolder[p.holder_id] || { name: p.holder_name, pct: 0 };
+    byHolder[p.holder_id].pct = p.ownership_percent;
+  });
+  let i = 0;
+  Object.keys(byHolder).forEach((holderId) => {
+    const h = byHolder[holderId];
+    const seg = document.createElement("div");
+    seg.className = "ct-bar-seg " + colors[i % colors.length];
+    seg.style.flexBasis = h.pct + "%";
+    seg.textContent = h.pct >= 8 ? h.pct.toFixed(1) + "%" : "";
+    bar.appendChild(seg);
+    const item = document.createElement("div");
+    item.className = "ct-legend-item";
+    item.innerHTML = '<span class="ct-legend-dot ct-bar-seg ' + colors[i % colors.length] + '"></span> ' + h.name + ' \u2014 ' + h.pct.toFixed(1) + '%';
+    legend.appendChild(item);
+    i++;
+  });
+  total.textContent = data.total_fully_diluted_shares.toLocaleString();
+}
+</script>
+</body>
+
+</html>

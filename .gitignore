@@ -1,0 +1,44 @@
+# --- Dependencies ----------------------------------------------------
+node_modules/
+
+# --- Python ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.egg
+
+# --- Environment / secrets -------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# --- Database ----------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# --- OS / editors ------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Local runtime artifacts -------------------------------------------
+_server.pid
+
+# Local test documents (not part of the repo)
+/Warba_Bank_Base_Prospectus_-_final.pdf
+# Uploaded original documents (may contain PII)
+uploads/
+# Local runtime logs
+server_out.txt
+server_err.txt
+server_log.txt
+pytest_*.txt
+server.log

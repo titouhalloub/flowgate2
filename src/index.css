@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  --dashboard-bg: #F4F6FB;
+  --dashboard-card: #FFFFFF;
+  --dashboard-primary: #7048E8;
+  --dashboard-blue: #2342E3;
+}
+
+body {
+  margin: 0;
+  background-color: #F4F6FB;
+  color: #1F2937;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-serif-display {
+  font-family: 'Spectral', Georgia, serif;
+}
+
+.font-mono-code {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
