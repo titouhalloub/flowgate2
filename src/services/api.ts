@@ -13,7 +13,7 @@ import {
 // Python FastAPI backend (local or Render) every handler goes live-first and
 // falls back to the local demo mutation only if the API call fails.
 // ---------------------------------------------------------------------------
-let apiBase = 'https://flowgate-7q0p.onrender.com';
+let apiBase = '';
 let apiKey = 'development_key_123';
 let cachedInstrumentId: string | null = null;
 
@@ -28,7 +28,7 @@ export function getApiBase(): string {
 }
 
 export function isLive(): boolean {
-  return apiBase.startsWith('http');
+  return apiBase.length > 0;
 }
 
 export function authHeaders(json = true): Record<string, string> {

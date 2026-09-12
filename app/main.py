@@ -125,13 +125,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_static_dir = Path(__file__).resolve().parent.parent / "static"
+_dist_dir = Path(__file__).resolve().parent.parent / "dist"
+_static_dir = _dist_dir if (_dist_dir / "index.html").is_file() else Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/")
 def root() -> FileResponse:
-    """Serve the live demo page at the root URL."""
+    """Serve the React app at the root URL, falling back to the legacy demo."""
+    index = _static_dir / "index.html"
+    return FileResponse(str(index))
+
+
+@app.get("/{path:path}")
+def spa_fallback(path: str) -> FileResponse:
+    """Serve the React app for any unmatched route (SPA client-side routing)."""
     index = _static_dir / "index.html"
     return FileResponse(str(index))
 

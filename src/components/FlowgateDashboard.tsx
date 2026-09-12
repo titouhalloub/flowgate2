@@ -46,10 +46,10 @@ export const FlowgateDashboard: React.FC<FlowgateDashboardProps> = ({
 }) => {
   // Connection / Settings state (from index.html #settings, #conn-toggle)
   const [showSettings, setShowSettings] = useState(false);
-  const [apiBase, setApiBase] = useState('https://flowgate-7q0p.onrender.com');
+  const [apiBase, setApiBase] = useState('');
   const [apiKey, setApiKey] = useState('development_key_123');
   const [isConnected, setIsConnected] = useState(true);
-  const [connectionLabel, setConnectionLabel] = useState('connected (Render Python: flowgate-7q0p.onrender.com)');
+  const [connectionLabel, setConnectionLabel] = useState('local');
   const [currentInstrumentId, setCurrentInstrumentId] = useState<string | null>(null);
 
   // Document Intake & Compliance state (from index.html #doc-text, #mode-traditional, #mode-islamic)
