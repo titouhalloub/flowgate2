@@ -46,7 +46,9 @@ export const FlowgateDashboard: React.FC<FlowgateDashboardProps> = ({
 }) => {
   // Connection / Settings state (from index.html #settings, #conn-toggle)
   const [showSettings, setShowSettings] = useState(false);
-  const [apiBase, setApiBase] = useState('');
+const [apiBase, setApiBase] = useState(
+  typeof window !== 'undefined' ? window.location.origin : ''
+);
   const [apiKey, setApiKey] = useState('development_key_123');
   const [isConnected, setIsConnected] = useState(true);
   const [connectionLabel, setConnectionLabel] = useState('local');
