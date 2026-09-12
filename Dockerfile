@@ -11,6 +11,7 @@ RUN npm install --no-audit --no-fund
 # Copy the rest of the frontend source
 COPY vite.config.ts index.html tsconfig.json tsconfig.node.json server.ts ./
 COPY src ./src
+COPY public ./public    # ← add this
 
 # Build the React app.  Only vite build is needed for the production
 # assets; the esbuild step that bundles server.ts is not used here
