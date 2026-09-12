@@ -1067,7 +1067,7 @@ Certification: The structure described is reviewed and approved as Shariah-compl
       <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-xs border border-gray-100 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <img
-            src="/flowgate-logo.png"
+            src={`${import.meta.env.BASE_URL}flowgate-logo.png`}
             alt="Flowgate Logo"
             className="w-10 h-10 rounded-xl object-cover shadow-sm border border-gray-200/80"
             referrerPolicy="no-referrer"
