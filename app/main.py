@@ -137,11 +137,7 @@ def root() -> FileResponse:
     return FileResponse(str(index))
 
 
-@app.get("/{path:path}")
-def spa_fallback(path: str) -> FileResponse:
-    """Serve the React app for any unmatched route (SPA client-side routing)."""
-    index = _static_dir / "index.html"
-    return FileResponse(str(index))
+
 
 
 # --------------------------------------------------------------------------- #
@@ -1938,3 +1934,10 @@ def reject_transfer_evaluation(
     session.commit()
     session.refresh(evaluation)
     return _evaluation_out(session, evaluation)
+
+
+@app.get("/{path:path}")
+def spa_fallback(path: str) -> FileResponse:
+    """Serve the React app for any unmatched route (SPA client-side routing)."""
+    index = _static_dir / "index.html"
+    return FileResponse(str(index))
