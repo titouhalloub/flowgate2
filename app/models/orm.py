@@ -52,6 +52,9 @@ from app.models.enums import (
     TransactionType,
     ShariahContractType,
     ShariahReviewStatus,
+    TransferEvaluationOutcome,
+    TransferGate,
+    TransferRuleType,
     SYSTEM_SETTABLE,
     HUMAN_ONLY,
 )
@@ -577,4 +580,114 @@ class CapTableProposal(Base):
         return (
             f"<CapTableProposal doc={self.document_id!r} "
             f"status={self.status.value}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase D -- transfer rules / ROFR engine. See PHASE-D-TRANSFER-RULES.md.
+# Rules are prepared governance; a named human disposes. Every gate decision
+# (including ALLOWED) leaves an immutable TransferEvaluation audit row.
+# ---------------------------------------------------------------------------
+
+
+class TransferRule(Base):
+    """A governance rule scoped to an issuer, evaluated against proposed
+    TRANSFER events before they reach the append-only log.
+
+    The rule never moves shares -- it either hard-blocks (gate=BLOCK, 409)
+    or demands a named human's approval (gate=REVIEW) before the transfer
+    is materialized. ``condition`` is a typed JSON bag keyed by rule_type;
+    unknown keys ride along verbatim so new rule types never need a
+    migration. Rules are deactivated (active=False), never deleted -- the
+    evaluation history must stay interpretable."""
+
+    __tablename__ = "transfer_rules"
+    __table_args__ = (
+        Index("ix_transfer_rules_issuer_name", "issuer_name"),
+        Index("ix_transfer_rules_active", "active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issuer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    rule_type: Mapped[TransferRuleType] = mapped_column(
+        Enum(TransferRuleType, native_enum=False, length=32),
+        nullable=False,
+    )
+    # Typed per rule_type: rofr -> {window_days, exempt_holder_ids},
+    # board_approval -> {min_quantity}, bylaw_lockup -> {until_date,
+    # holder_ids}. Unknown keys are preserved verbatim (audit).
+    condition: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    gate: Mapped[TransferGate] = mapped_column(
+        Enum(TransferGate, native_enum=False, length=16),
+        nullable=False,
+    )
+    # Named role expected to resolve REVIEW evaluations, e.g. "Board
+    # Secretary". Surfaced to clients; not enforced as a hard FK (roles are
+    # governance labels, not registry rows).
+    approver: Mapped[str] = mapped_column(String(255), nullable=False)
+    escalation_role: Mapped[str | None] = mapped_column(
+        String(255), default=None
+    )
+    escalation_after_days: Mapped[int | None] = mapped_column(default=None)
+    active: Mapped[bool] = mapped_column(default=True)
+    # Named human who created the rule -- same audit rule as review.
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<TransferRule issuer={self.issuer_name!r} "
+            f"type={self.rule_type.value} gate={self.gate.value} "
+            f"active={self.active}>"
+        )
+
+
+class TransferEvaluation(Base):
+    """The immutable record of one gate evaluation against one proposed
+    TRANSFER event. ALLOWED transfers get a row too, so "why was this
+    transfer permitted" always has an answer. PENDING rows are the Phase D
+    review queue; approve/reject are named-human transitions."""
+
+    __tablename__ = "transfer_evaluations"
+    __table_args__ = (
+        Index("ix_transfer_evaluations_security_id", "security_id"),
+        Index("ix_transfer_evaluations_outcome", "outcome"),
+        Index("ix_transfer_evaluations_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    security_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("securities.id")
+    )
+    from_holder_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("investors.id")
+    )
+    holder_id: Mapped[str] = mapped_column(String(64), ForeignKey("investors.id"))
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    price_per_share: Mapped[float | None] = mapped_column(Float, default=None)
+    effective_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # [{rule_id, rule_type, gate, outcome}] -- the full decision trace.
+    rules_evaluated: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list
+    )
+    outcome: Mapped[TransferEvaluationOutcome] = mapped_column(
+        Enum(TransferEvaluationOutcome, native_enum=False, length=24),
+        default=TransferEvaluationOutcome.PENDING,
+    )
+    blocking_rule_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("transfer_rules.id"), default=None
+    )
+    # Named human for APPROVED / REJECTED transitions (never the system).
+    reviewer: Mapped[str | None] = mapped_column(String(64), default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<TransferEvaluation security={self.security_id!r} "
+            f"outcome={self.outcome.value} qty={self.quantity}>"
         )

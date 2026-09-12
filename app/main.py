@@ -51,6 +51,9 @@ from app.api_schemas import (
     PortfolioHoldingOut,
     SecurityCreate,
     SecurityOut,
+    TransferEvaluationOut,
+    TransferRuleCreate,
+    TransferRuleOut,
 )
 from app.captable import CapTableError, compute_cap_table
 from app.compliance import ComplianceGateway
@@ -68,6 +71,9 @@ from app.models.enums import (
     ProposalType,
     SecurityType,
     ShariahReviewStatus,
+    TransferEvaluationOutcome,
+    TransferGate,
+    TransferRuleType,
 )
 from app.models.orm import (
     CapTableEvent,
@@ -80,12 +86,19 @@ from app.models.orm import (
     Investor,
     LedgerEntry,
     Security as SecurityModel,
+    TransferEvaluation,
+    TransferRule,
 )
 from app.models.orm import _utcnow
 from app.pipeline import process_document
 from app.ocr import TextExtractionError, UnsupportedFileType, UploadTooLarge, text_from_upload
 from app.review import ShariahReviewError, submit_human_review_instrument
 from app.schemas import EquitySubscriptionExtraction
+from app.transfer_rules import (
+    TransferRuleError,
+    evaluate_transfer_rules,
+    validate_rule_condition,
+)
 
 
 @asynccontextmanager
@@ -603,6 +616,46 @@ def record_cap_table_event(
         if session.get(Investor, holder_id) is None:
             raise HTTPException(
                 status_code=400, detail=f"Investor {holder_id!r} not found"
+            )
+
+    # Phase D governance gate: every proposed TRANSFER is evaluated against
+    # the issuer's active rules BEFORE it reaches the append-only log. The
+    # engine commits the immutable evaluation row (and its ledger entry for
+    # final outcomes) before returning; ALLOWED falls through to the write.
+    if payload.event_type == CapTableEventType.TRANSFER.value:
+        if payload.from_holder_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="A transfer requires from_holder_id",
+            )
+        evaluation = evaluate_transfer_rules(
+            session,
+            security,
+            {
+                "security_id": payload.security_id,
+                "from_holder_id": payload.from_holder_id,
+                "holder_id": payload.holder_id,
+                "quantity": payload.quantity,
+                "price_per_share": payload.price_per_share,
+                "effective_date": payload.effective_date,
+            },
+        )
+        if evaluation.outcome is TransferEvaluationOutcome.BLOCKED:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Transfer blocked by governance rule",
+                    "transfer_evaluation_id": evaluation.id,
+                    "blocking_rule_id": evaluation.blocking_rule_id,
+                },
+            )
+        if evaluation.outcome is TransferEvaluationOutcome.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Transfer requires governance approval",
+                    "transfer_evaluation_id": evaluation.id,
+                },
             )
 
     event = CapTableEvent(
@@ -1509,3 +1562,371 @@ def record_capital_call_payment(
     session.commit()
     session.refresh(payment)
     return PaymentOut.model_validate(payment)
+
+
+# --------------------------------------------------------------------------- #
+# Transfer rules / ROFR engine -- Phase D governance gate
+#
+# Rules are prepared governance; a named human disposes. The engine
+# (app.transfer_rules) evaluates every proposed TRANSFER against the
+# issuer's active rules before the event reaches the append-only log;
+# these routes manage the rules, the review queue, and the named-human
+# resolution. See PHASE-D-TRANSFER-RULES.md.
+# --------------------------------------------------------------------------- #
+
+
+@app.post(
+    "/transfer-rules",
+    response_model=TransferRuleOut,
+    status_code=201,
+    responses={
+        401: {"model": ErrorOut},
+        400: {"model": ErrorOut},
+    },
+)
+def create_transfer_rule(
+    payload: TransferRuleCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> TransferRule:
+    """Create a governance rule scoped to an issuer. 400 on an unknown
+    rule_type or a malformed condition bag -- a broken rule must never
+    reach the evaluation loop (the engine fails closed on unparseable
+    conditions at evaluation time, but garbage is stopped at the door)."""
+    condition = dict(payload.condition or {})
+    if payload.window_days is not None:
+        # The top-level window field rides into the validated condition bag
+        # so it is persisted with the rule and visible in every audit row.
+        condition["window_days"] = payload.window_days
+    try:
+        condition = validate_rule_condition(payload.rule_type, condition)
+    except TransferRuleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Supersession: a new rule of the same type for the same issuer replaces
+    # the previous active one (governance history stays interpretable -- the
+    # old row is deactivated, never deleted).
+    stale_rules = (
+        session.execute(
+            select(TransferRule)
+            .where(TransferRule.issuer_name == payload.issuer_name)
+            .where(
+                TransferRule.rule_type == TransferRuleType(payload.rule_type)
+            )
+            .where(TransferRule.active.is_(True))
+        )
+        .scalars()
+        .all()
+    )
+    for stale in stale_rules:
+        stale.active = False
+
+    rule = TransferRule(
+        id=str(uuid4()),
+        issuer_name=payload.issuer_name,
+        rule_type=TransferRuleType(payload.rule_type),
+        condition=condition,
+        gate=TransferGate(payload.gate),
+        approver=payload.approver,
+        escalation_role=payload.escalation_role,
+        escalation_after_days=payload.escalation_after_days,
+        active=True,
+        created_by=payload.created_by,
+    )
+    session.add(rule)
+    session.commit()
+    session.refresh(rule)
+    return rule
+
+
+@app.get(
+    "/transfer-rules",
+    response_model=list[TransferRuleOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_transfer_rules(
+    issuer_name: str | None = None,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[TransferRuleOut]:
+    """All rules (active and inactive -- history must stay interpretable),
+    newest first, optionally scoped to one issuer."""
+    query = select(TransferRule).order_by(TransferRule.created_at.desc())
+    if issuer_name is not None:
+        query = query.where(TransferRule.issuer_name == issuer_name)
+    rows = session.execute(query).scalars().all()
+    return [TransferRuleOut.model_validate(r) for r in rows]
+
+
+def _evaluation_overdue(
+    session: Session, evaluation: TransferEvaluation
+) -> bool:
+    """Derived, never stored (Phase B overdue-badge pattern): a PENDING
+    evaluation is overdue when any triggering rule's escalation_after_days
+    has elapsed since the evaluation was created."""
+    if evaluation.outcome is not TransferEvaluationOutcome.PENDING:
+        return False
+    rule_ids = [
+        r.get("rule_id")
+        for r in (evaluation.rules_evaluated or [])
+        if isinstance(r, dict) and r.get("rule_id")
+    ]
+    if not rule_ids:
+        return False
+    rules = (
+        session.execute(select(TransferRule).where(TransferRule.id.in_(rule_ids)))
+        .scalars()
+        .all()
+    )
+    now = _utcnow()
+    for rule in rules:
+        if rule.escalation_after_days is None:
+            continue
+        created = evaluation.created_at
+        if created is None:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if now - created > timedelta(days=rule.escalation_after_days):
+            return True
+    return False
+
+
+@app.get(
+    "/transfer-evaluations",
+    response_model=list[TransferEvaluationOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_transfer_evaluations(
+    outcome: str | None = None,
+    security_id: str | None = None,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[TransferEvaluationOut]:
+    """Gate decisions, newest first. ``?outcome=pending`` is the review
+    queue; every pending row carries its derived ``overdue`` flag so the
+    UI never recomputes escalation differently from the server."""
+    query = select(TransferEvaluation).order_by(
+        TransferEvaluation.created_at.desc()
+    )
+    if outcome is not None:
+        try:
+            outcome_enum = TransferEvaluationOutcome(outcome)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown evaluation outcome {outcome!r}",
+            ) from exc
+        query = query.where(TransferEvaluation.outcome == outcome_enum)
+    if security_id is not None:
+        query = query.where(TransferEvaluation.security_id == security_id)
+    rows = session.execute(query).scalars().all()
+    return [
+        TransferEvaluationOut(
+            id=ev.id,
+            security_id=ev.security_id,
+            from_holder_id=ev.from_holder_id,
+            holder_id=ev.holder_id,
+            quantity=ev.quantity,
+            price_per_share=ev.price_per_share,
+            effective_date=ev.effective_date,
+            rules_evaluated=ev.rules_evaluated or [],
+            outcome=ev.outcome.value,
+            blocking_rule_id=ev.blocking_rule_id,
+            reviewer=ev.reviewer,
+            reviewed_at=ev.reviewed_at,
+            created_at=ev.created_at,
+            overdue=_evaluation_overdue(session, ev),
+        )
+        for ev in rows
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Transfer governance decisions (Phase D) -- resolving PENDING evaluations.   #
+#                                                                             #
+# Approve writes the pre-validated transfer event with the same overdraft     #
+# replay check as the normal path; reject writes nothing. Both refuse an      #
+# already-resolved evaluation (409) and require a named human reviewer.       #
+# --------------------------------------------------------------------------- #
+
+
+def _evaluation_out(
+    session: Session, evaluation: TransferEvaluation
+) -> TransferEvaluationOut:
+    return TransferEvaluationOut(
+        id=evaluation.id,
+        security_id=evaluation.security_id,
+        from_holder_id=evaluation.from_holder_id,
+        holder_id=evaluation.holder_id,
+        quantity=evaluation.quantity,
+        price_per_share=evaluation.price_per_share,
+        effective_date=evaluation.effective_date,
+        rules_evaluated=evaluation.rules_evaluated or [],
+        outcome=evaluation.outcome.value,
+        blocking_rule_id=evaluation.blocking_rule_id,
+        reviewer=evaluation.reviewer,
+        reviewed_at=evaluation.reviewed_at,
+        created_at=evaluation.created_at,
+        overdue=_evaluation_overdue(session, evaluation),
+    )
+
+
+def _pending_evaluation_or_error(
+    session: Session, evaluation_id: str
+) -> TransferEvaluation:
+    evaluation = session.get(TransferEvaluation, evaluation_id)
+    if evaluation is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Transfer evaluation {evaluation_id!r} not found",
+        )
+    if evaluation.outcome is not TransferEvaluationOutcome.PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Transfer evaluation already resolved as "
+                    f"{evaluation.outcome.value}"
+                ),
+                "transfer_evaluation_id": evaluation.id,
+                "outcome": evaluation.outcome.value,
+            },
+        )
+    return evaluation
+
+
+@app.post(
+    "/transfer-evaluations/{evaluation_id}/approve",
+    response_model=TransferEvaluationOut,
+    responses={
+        401: {"model": ErrorOut},
+        404: {"model": ErrorOut},
+        409: {"model": ErrorOut},
+    },
+)
+def approve_transfer_evaluation(
+    evaluation_id: str,
+    reviewer: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> TransferEvaluationOut:
+    """Approve a PENDING evaluation and write its transfer event.
+
+    The event is re-validated against the *current* ledger (overdraft
+    replay), so shares that moved between proposal and decision are
+    caught here, not silently written. On failure the event is rolled
+    back and the evaluation stays PENDING for a corrected decision.
+    """
+    reviewer = reviewer.strip()
+    if not reviewer:
+        raise HTTPException(
+            status_code=400, detail="reviewer must be a named human"
+        )
+
+    evaluation = _pending_evaluation_or_error(session, evaluation_id)
+    security = session.get(SecurityModel, evaluation.security_id)
+    if security is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Security {evaluation.security_id!r} not found",
+        )
+
+    event = CapTableEvent(
+        id=str(uuid4()),
+        security_id=evaluation.security_id,
+        target_security_id=None,
+        event_type=CapTableEventType.TRANSFER.value,
+        holder_id=evaluation.holder_id,
+        from_holder_id=evaluation.from_holder_id,
+        quantity=evaluation.quantity,
+        price_per_share=evaluation.price_per_share,
+        effective_date=evaluation.effective_date,
+        notes=f"Approved via transfer evaluation {evaluation.id} by {reviewer}",
+    )
+    session.add(event)
+    try:
+        session.commit()
+    except Exception as exc:  # noqa: BLE001 -- surfaced as a real 400, not a 500
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.refresh(event)
+
+    # Same write-time consistency replay as record_cap_table_event.
+    try:
+        compute_cap_table(session, security.issuer_name)
+    except CapTableError as exc:
+        session.delete(event)
+        session.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    evaluation.outcome = TransferEvaluationOutcome.APPROVED
+    evaluation.reviewer = reviewer
+    evaluation.reviewed_at = _utcnow()
+    session.add(
+        LedgerEntry(
+            id=str(uuid4()),
+            entry_type=LedgerEntryType.TRANSFER_EVALUATION,
+            payload={
+                "event": "transfer_approved",
+                "transfer_evaluation_id": evaluation.id,
+                "cap_table_event_id": event.id,
+                "security_id": evaluation.security_id,
+                "from_holder_id": evaluation.from_holder_id,
+                "to_holder_id": evaluation.holder_id,
+                "quantity": evaluation.quantity,
+                "reviewer": reviewer,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(evaluation)
+    return _evaluation_out(session, evaluation)
+
+
+@app.post(
+    "/transfer-evaluations/{evaluation_id}/reject",
+    response_model=TransferEvaluationOut,
+    responses={
+        401: {"model": ErrorOut},
+        404: {"model": ErrorOut},
+        409: {"model": ErrorOut},
+    },
+)
+def reject_transfer_evaluation(
+    evaluation_id: str,
+    reviewer: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> TransferEvaluationOut:
+    """Reject a PENDING evaluation. Nothing is written to the cap table;
+    the rejection itself is recorded on the evaluation and in the ledger."""
+    reviewer = reviewer.strip()
+    if not reviewer:
+        raise HTTPException(
+            status_code=400, detail="reviewer must be a named human"
+        )
+
+    evaluation = _pending_evaluation_or_error(session, evaluation_id)
+
+    evaluation.outcome = TransferEvaluationOutcome.REJECTED
+    evaluation.reviewer = reviewer
+    evaluation.reviewed_at = _utcnow()
+    session.add(
+        LedgerEntry(
+            id=str(uuid4()),
+            entry_type=LedgerEntryType.TRANSFER_EVALUATION,
+            payload={
+                "event": "transfer_rejected",
+                "transfer_evaluation_id": evaluation.id,
+                "security_id": evaluation.security_id,
+                "from_holder_id": evaluation.from_holder_id,
+                "to_holder_id": evaluation.holder_id,
+                "quantity": evaluation.quantity,
+                "reviewer": reviewer,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(evaluation)
+    return _evaluation_out(session, evaluation)

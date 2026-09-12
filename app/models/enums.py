@@ -109,6 +109,7 @@ class LedgerEntryType(str, Enum):
     CAP_TABLE_PROPOSAL = "cap_table_proposal"
     CAPITAL_CALL_REVIEW = "capital_call_review"  # named-reviewer approve/reject gate
     CAPITAL_CALL_PAYMENT = "capital_call_payment"  # recorded receipt against an approved call
+    TRANSFER_EVALUATION = "transfer_evaluation"  # Phase D gate decision on a proposed transfer
 
 
 class ProposalStatus(str, Enum):
@@ -179,5 +180,42 @@ class CapitalCallStatus(str, Enum):
 
     PENDING_COMMITMENT_LOOKUP = "pending_commitment_lookup"
     PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Phase D -- transfer rules / ROFR engine. Rules are prepared governance; a
+# named human disposes. See PHASE-D-TRANSFER-RULES.md.
+# ---------------------------------------------------------------------------
+
+
+class TransferRuleType(str, Enum):
+    """Vocabulary of governance rules evaluated against proposed TRANSFER
+    events. The engine reads only the condition keys documented in
+    PHASE-D-TRANSFER-RULES.md; unknown keys ride along verbatim in the
+    audit record so new rule types never need a migration."""
+
+    ROFR = "rofr"
+    BOARD_APPROVAL = "board_approval"
+    BYLAW_LOCKUP = "bylaw_lockup"
+
+
+class TransferGate(str, Enum):
+    """What an active rule does to a triggering transfer. BLOCK is a hard
+    409 (no human can waive it through this API); REVIEW requires a named
+    approver to materialize the transfer."""
+
+    BLOCK = "block"
+    REVIEW = "review"
+
+
+class TransferEvaluationOutcome(str, Enum):
+    """Lifecycle of one gate decision on one proposed transfer. Every
+    outcome -- including ALLOWED -- is an immutable audit row."""
+
+    PENDING = "pending"
+    ALLOWED = "allowed"
+    BLOCKED = "blocked"
     APPROVED = "approved"
     REJECTED = "rejected"

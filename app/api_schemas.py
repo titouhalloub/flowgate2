@@ -342,3 +342,74 @@ class PaymentOut(BaseModel):
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+# --------------------------------------------------------------------------- #
+# Transfer rules / ROFR engine -- Phase D governance gate
+# --------------------------------------------------------------------------- #
+
+
+class TransferRuleCreate(BaseModel):
+    """Request body for creating a governance rule scoped to an issuer.
+
+    ``condition`` is a typed JSON bag keyed by ``rule_type`` (validated by
+    app.transfer_rules.validate_rule_condition -- unknown keys ride along
+    verbatim so future rule types never need a migration)."""
+
+    issuer_name: str = Field(..., min_length=1, max_length=255)
+    # No pattern here ON PURPOSE: an unknown rule_type must surface as the
+    # endpoint's 400 (from validate_rule_condition), not Pydantic's 422.
+    rule_type: str = Field(..., min_length=1, max_length=64)
+    condition: dict[str, Any] = Field(default_factory=dict)
+    # Top-level ROFR-window field, merged into ``condition`` by the endpoint
+    # before validation; must be a positive int when present (400, not 422).
+    window_days: int | None = None
+    gate: str = Field(..., pattern="^(block|review)$")
+    approver: str = Field(..., min_length=1, max_length=255)
+    escalation_role: str | None = Field(default=None, max_length=255)
+    escalation_after_days: int | None = Field(default=None, ge=1)
+    created_by: str = Field(..., min_length=1, max_length=64)
+
+
+class TransferRuleOut(BaseModel):
+    """Read-side view of a TransferRule (active and inactive both)."""
+
+    id: str
+    issuer_name: str
+    rule_type: str
+    condition: dict[str, Any]
+    gate: str
+    approver: str
+    escalation_role: str | None = None
+    escalation_after_days: int | None = None
+    active: bool
+    created_by: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class TransferEvaluationOut(BaseModel):
+    """Read-side view of one gate decision. ``overdue`` is *derived* at
+    read time (pending AND older than the rule's escalation_after_days) --
+    the same derivation-only pattern as the Phase B overdue badge; it is
+    never stored."""
+
+    id: str
+    security_id: str
+    from_holder_id: str
+    holder_id: str
+    quantity: float
+    price_per_share: float | None = None
+    effective_date: datetime
+    rules_evaluated: list[dict[str, Any]] = []
+    outcome: str
+    blocking_rule_id: str | None = None
+    reviewer: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None
+    overdue: bool = False
+
+    model_config = {"from_attributes": True}
+
+
