@@ -5,9 +5,11 @@ cap-table bridge shipped; its "approval routing" days are now redundant
 with the proposal gate. This plan reuses that gate instead of building a
 second one. No code changes in this commit — plan only.*
 
-*Status: Phase A (endpoints + review gate + UI queue panel) and Phase B
-(due-date query + overdue badge) SHIPPED. Phase C (payments/reconciliation)
-is the next tracked phase; Phase D remains trigger-gated.*
+*Status: Phase A (endpoints + review gate + UI queue panel), Phase B
+(due-date query + overdue badge) and Phase C (payments/reconciliation —
+C1 model + migration, C2 payments endpoints with derived UNPAID/PARTIAL/PAID
+status, C3 per-call payment UI, 9 tests) SHIPPED. Phase D (transfer rules/
+ROFR engine) remains trigger-gated.*
 
 ---
 

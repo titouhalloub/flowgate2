@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { CapitalCallNotice } from '../types';
+import React, { useState, useEffect } from 'react';
+import { CapitalCallNotice, CapitalCallPayment } from '../types';
+import * as liveApi from '../services/api';
 import {
   DollarSign,
   Calendar,
@@ -17,12 +18,14 @@ interface CapitalCallsViewProps {
   capitalCalls: CapitalCallNotice[];
   onReviewCall: (callId: string, status: 'approved' | 'rejected', reviewer: string) => void;
   onCreateCall: (call: Omit<CapitalCallNotice, 'id' | 'status' | 'created_at' | 'reconciled'>) => void;
+  onRefreshCalls?: () => Promise<void> | void;
 }
 
 export const CapitalCallsView: React.FC<CapitalCallsViewProps> = ({
   capitalCalls,
   onReviewCall,
   onCreateCall,
+  onRefreshCalls,
 }) => {
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -34,6 +37,101 @@ export const CapitalCallsView: React.FC<CapitalCallsViewProps> = ({
   const [currency, setCurrency] = useState('USD');
   const [dueDate, setDueDate] = useState('2026-04-15');
   const [wireDetails, setWireDetails] = useState('ABA 121000358 / Acct 984-2194819-01 (Silicon Valley Bank)');
+
+  // Phase C: per-call payments panel state. Payments are the server's truth
+  // when live; demo mode keeps a local map so the panel still works.
+  const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
+  const [livePayments, setLivePayments] = useState<Record<string, CapitalCallPayment[]>>({});
+  const [demoPayments, setDemoPayments] = useState<Record<string, CapitalCallPayment[]>>({});
+  const [payAmount, setPayAmount] = useState<string>('');
+  const [payReference, setPayReference] = useState<string>('');
+  const [payBusy, setPayBusy] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (expandedCallId === null || !liveApi.isLive()) return;
+    let cancelled = false;
+    setPayError(null);
+    liveApi
+      .listCapitalCallPayments(expandedCallId)
+      .then((rows) => {
+        if (!cancelled) {
+          setLivePayments((prev) => ({ ...prev, [expandedCallId]: rows }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPayError('Could not load payments from the backend.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedCallId]);
+
+  const paymentsFor = (call: CapitalCallNotice): CapitalCallPayment[] => {
+    const map = liveApi.isLive() ? livePayments : demoPayments;
+    return map[call.id] || [];
+  };
+
+  const remainingFor = (call: CapitalCallNotice): number => {
+    const paid = paymentsFor(call).reduce((acc, p) => acc + p.amount, 0);
+    return Math.max(0, call.capital_owing - paid);
+  };
+
+  const statusFor = (call: CapitalCallNotice): string => {
+    if (liveApi.isLive() && call.payment_status) return call.payment_status;
+    const remaining = remainingFor(call);
+    if (remaining <= 0.005) return 'paid';
+    if (remaining < call.capital_owing - 0.005) return 'partial';
+    return 'unpaid';
+  };
+
+  const handleRecordPayment = async (call: CapitalCallNotice) => {
+    const amount = parseFloat(payAmount);
+    setPayError(null);
+    if (!amount || amount <= 0) {
+      setPayError('Enter a positive payment amount.');
+      return;
+    }
+    if (amount > remainingFor(call) + 0.005) {
+      setPayError('Payment exceeds the remaining balance — overpayments are rejected, never absorbed.');
+      return;
+    }
+    setPayBusy(true);
+    try {
+      if (liveApi.isLive()) {
+        await liveApi.recordCapitalCallPayment(call.id, {
+          amount,
+          currency: call.currency,
+          reference: payReference.trim() || undefined,
+          recorded_by: reviewerName.trim() || 'unnamed reviewer',
+        });
+        const rows = await liveApi.listCapitalCallPayments(call.id);
+        setLivePayments((prev) => ({ ...prev, [call.id]: rows }));
+        if (onRefreshCalls) await onRefreshCalls();
+      } else {
+        const payment: CapitalCallPayment = {
+          id: 'pay_' + Math.random().toString(36).substring(2, 9),
+          capital_call_id: call.id,
+          amount,
+          currency: call.currency,
+          paid_date: new Date().toISOString(),
+          reference: payReference.trim() || null,
+          recorded_by: reviewerName.trim() || 'unnamed reviewer',
+          created_at: new Date().toISOString(),
+        };
+        setDemoPayments((prev) => ({
+          ...prev,
+          [call.id]: [...(prev[call.id] || []), payment],
+        }));
+      }
+      setPayAmount('');
+      setPayReference('');
+    } catch (e: unknown) {
+      setPayError(e instanceof Error ? e.message : 'Could not record the payment.');
+    } finally {
+      setPayBusy(false);
+    }
+  };
 
   const isOverdue = (call: CapitalCallNotice) => {
     if (!call.due_date || call.status === 'approved') return false;
@@ -175,8 +273,12 @@ export const CapitalCallsView: React.FC<CapitalCallsViewProps> = ({
             <tbody className="divide-y divide-gray-100 text-gray-800">
               {displayedCalls.map((call) => {
                 const overdue = isOverdue(call);
+                const payStatus = call.status === 'approved' ? statusFor(call) : null;
+                const remaining = remainingFor(call);
+                const expanded = expandedCallId === call.id;
                 return (
-                  <tr key={call.id} className="hover:bg-gray-50/60 transition-colors">
+                <React.Fragment key={call.id}>
+                  <tr className="hover:bg-gray-50/60 transition-colors">
                     <td className="px-3 py-3 font-semibold text-gray-900 flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full bg-[#7048E8]" />
                       <span>{call.funder_name}</span>
@@ -236,10 +338,100 @@ export const CapitalCallsView: React.FC<CapitalCallsViewProps> = ({
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs text-gray-400 font-medium">Settled</span>
+                        <div className="inline-flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] uppercase font-bold border ${
+                              payStatus === 'paid'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : payStatus === 'partial'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-gray-50 text-gray-500 border-gray-200'
+                            }`}
+                          >
+                            {payStatus}
+                          </span>
+                          {payStatus !== 'paid' && (
+                            <span className="text-[10px] text-gray-400 font-medium">
+                              {remaining.toLocaleString()} {call.currency} left
+                            </span>
+                          )}
+                          <button
+                            onClick={() => setExpandedCallId(expanded ? null : call.id)}
+                            className="px-2.5 py-1 rounded-lg bg-[#F4F6FC] hover:bg-[#EBE7FD] text-gray-700 hover:text-[#7048E8] border border-gray-200 text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            {expanded ? 'Hide' : 'Payments'}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
+                  {expanded && call.status === 'approved' && (
+                    <tr className="bg-[#F4F6FB]/60">
+                      <td colSpan={6} className="px-3 py-4">
+                        <div className="space-y-3">
+                          {/* Payment history */}
+                          <div className="space-y-1.5">
+                            {paymentsFor(call).length === 0 ? (
+                              <div className="text-[11px] text-gray-400 font-medium">
+                                No payments recorded yet — remaining balance{' '}
+                                {remaining.toLocaleString()} {call.currency}.
+                              </div>
+                            ) : (
+                              paymentsFor(call).map((p) => (
+                                <div
+                                  key={p.id}
+                                  className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100 text-[11px]"
+                                >
+                                  <span className="font-mono font-bold text-emerald-700">
+                                    +{p.amount.toLocaleString()} {p.currency}
+                                  </span>
+                                  <span className="text-gray-500">
+                                    {p.paid_date ? new Date(p.paid_date).toLocaleDateString() : '—'}
+                                    {p.reference ? ` · ref ${p.reference}` : ''}
+                                  </span>
+                                  <span className="text-gray-400">by {p.recorded_by}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          {/* Record payment form */}
+                          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder={`Amount (${call.currency})`}
+                              value={payAmount}
+                              onChange={(e) => setPayAmount(e.target.value)}
+                              className="w-32 bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-gray-800 font-mono focus:border-[#7048E8] outline-none"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Wire reference (optional)"
+                              value={payReference}
+                              onChange={(e) => setPayReference(e.target.value)}
+                              className="flex-1 min-w-[160px] bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-gray-800 focus:border-[#7048E8] outline-none"
+                            />
+                            <button
+                              onClick={() => handleRecordPayment(call)}
+                              disabled={payBusy}
+                              className="px-3 py-1.5 rounded-lg bg-[#7048E8] hover:bg-[#5C38D1] disabled:opacity-50 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                            >
+                              {payBusy ? 'Recording…' : 'Record Payment'}
+                            </button>
+                          </div>
+                          {payError && (
+                            <div className="text-[11px] text-red-600 font-semibold flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              {payError}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
                 );
               })}
             </tbody>

@@ -300,6 +300,13 @@ class CapitalCallOut(BaseModel):
     requires_manual_review: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Phase C reconciliation -- DERIVED at read time from sum(payments) vs
+    # amount_due, never stored. ``payment_status`` is unpaid/partial/paid;
+    # ``remaining`` = max(0, amount_due - total_paid) so the UI never
+    # recomputes it differently from the server.
+    total_paid: float = 0.0
+    remaining: float = 0.0
+    payment_status: str = "unpaid"
 
     model_config = {"from_attributes": True}
 
@@ -308,3 +315,30 @@ class CapitalCallReviewRequest(BaseModel):
     """Request body for the capital-call approval gate (Phase A)."""
     reviewer: str = Field(..., min_length=1)
     action: str = Field(..., pattern="^(approve|reject)$")
+
+
+class PaymentCreate(BaseModel):
+    """Request body for recording a payment against an APPROVED capital
+    call (Phase C). ``recorded_by`` is a named human -- same audit rule as
+    every other gate; the endpoint refuses anonymous receipts."""
+
+    amount: float = Field(gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    paid_date: datetime
+    reference: str | None = Field(default=None, max_length=255)
+    recorded_by: str = Field(..., min_length=1)
+
+
+class PaymentOut(BaseModel):
+    """Read-side view of a recorded CapitalCallPayment."""
+
+    id: str
+    capital_call_id: str
+    amount: float
+    currency: str
+    paid_date: datetime
+    reference: str | None = None
+    recorded_by: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}

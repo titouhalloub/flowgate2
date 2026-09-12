@@ -478,6 +478,53 @@ class CapitalCall(Base):
 
 
 # ---------------------------------------------------------------------------
+# Capital-call payments -- Phase C reconciliation.
+# ---------------------------------------------------------------------------
+
+
+class CapitalCallPayment(Base):
+    """Money actually received against an APPROVED capital call.
+
+    Record-keeping + reconciliation only -- the system never moves money and
+    never silently absorbs extra cash (an overpayment is rejected at the
+    endpoint). The reconciled state (unpaid/partial/paid) is always DERIVED
+    from ``sum(payments)`` vs the call's ``amount_due`` at read time and is
+    never stored on this row or the call: there is exactly one source of
+    truth and no cached figure to drift. Every payment is written by a named
+    human (``recorded_by``), same audit rule as every other gate.
+
+    ``reference`` is free text (wire ref / evidence doc id) so reconciliation
+    can point back at the bank statement without inventing a documents
+    sub-system for cash.
+    """
+
+    __tablename__ = "capital_call_payments"
+    __table_args__ = (
+        Index("ix_capital_call_payments_call", "capital_call_id"),
+        Index("ix_capital_call_payments_paid_date", "paid_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    capital_call_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("capital_calls.id"), nullable=False
+    )
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    paid_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    reference: Mapped[str | None] = mapped_column(String(255), default=None)
+    recorded_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<CapitalCallPayment call={self.capital_call_id!r} "
+            f"amount={self.amount} by={self.recorded_by!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Cap-table proposals -- extraction prepares, a human disposes.
 # ---------------------------------------------------------------------------
 

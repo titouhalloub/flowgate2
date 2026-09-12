@@ -163,6 +163,20 @@ export interface CapitalCall {
   reviewer?: string;
   reviewed_at?: string;
   created_at: string;
+  // Phase C reconciliation -- derived server-side, never recomputed in the UI
+  payment_status?: 'unpaid' | 'partial' | 'paid';
+  remaining?: number;
+}
+
+export interface CapitalCallPayment {
+  id: string;
+  capital_call_id: string;
+  amount: number;
+  currency: string;
+  paid_date: string;
+  reference?: string | null;
+  recorded_by: string;
+  created_at: string;
 }
 
 export type CapitalCallNotice = CapitalCall;

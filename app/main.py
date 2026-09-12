@@ -19,13 +19,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api_schemas import (
     CapitalCallCreate,
     CapitalCallOut,
     CapitalCallReviewRequest,
+    PaymentCreate,
+    PaymentOut,
     CapTableEventCreate,
     CapTableEventOut,
     CapTableOut,
@@ -71,6 +73,7 @@ from app.models.orm import (
     CapTableEvent,
     CapTableProposal,
     CapitalCall,
+    CapitalCallPayment,
     Document,
     Holding,
     Instrument,
@@ -1133,6 +1136,38 @@ def reject_cap_table_proposal(
 
 capital_call_out_schema = CapitalCallOut
 
+# Half-a-cent tolerance for float money comparisons: a payment within this
+# distance of the remaining balance closes the call exactly once, and float
+# noise from summing 500000.00 + 250000.005-style rows cannot flip a state.
+_PAYMENT_TOLERANCE = 0.005
+
+
+def derive_payment_status(amount_due: float, total_paid: float) -> str:
+    """unpaid / partial / paid, derived -- the single definition the API
+    exposes so no client recomputes it differently."""
+    if total_paid <= 0:
+        return "unpaid"
+    if total_paid + _PAYMENT_TOLERANCE >= amount_due:
+        return "paid"
+    return "partial"
+
+
+def _payment_sums(
+    session: Session, call_ids: set[str]
+) -> dict[str, float]:
+    """One grouped query for the whole page of calls -- never one per row."""
+    if not call_ids:
+        return {}
+    rows = session.execute(
+        select(
+            CapitalCallPayment.capital_call_id,
+            func.coalesce(func.sum(CapitalCallPayment.amount), 0.0),
+        )
+        .where(CapitalCallPayment.capital_call_id.in_(call_ids))
+        .group_by(CapitalCallPayment.capital_call_id)
+    ).all()
+    return {row[0]: float(row[1]) for row in rows}
+
 
 def _capital_calls_out(
     session: Session, calls: list[CapitalCall]
@@ -1145,6 +1180,9 @@ def _capital_calls_out(
     query per row. A ``funder_id`` whose Investor row has since vanished yields
     ``funder_name=None`` while ``funder_id`` stays set: the client can flag
     that honestly instead of pretending the link is intact.
+
+    Phase C: also derives reconciliation state (total_paid / remaining /
+    payment_status) from the payment rows in the same batched style.
     """
     ids = {c.funder_id for c in calls if c.funder_id}
     names: dict[str, str] = {}
@@ -1153,10 +1191,17 @@ def _capital_calls_out(
             select(Investor.id, Investor.name).where(Investor.id.in_(ids))
         ).all()
         names = {row[0]: row[1] for row in rows}
+
+    paid_by_call = _payment_sums(session, {c.id for c in calls})
+
     outs = []
     for c in calls:
         out = CapitalCallOut.model_validate(c)
         out.funder_name = names.get(c.funder_id) if c.funder_id else None
+        paid = paid_by_call.get(c.id, 0.0)
+        out.total_paid = paid
+        out.remaining = max(0.0, c.amount_due - paid)
+        out.payment_status = derive_payment_status(c.amount_due, paid)
         outs.append(out)
     return outs
 
@@ -1343,3 +1388,124 @@ def list_overdue_capital_calls(
         .order_by(CapitalCall.due_date.asc())
     ).scalars().all()
     return _capital_calls_out(session, list(rows))
+
+
+# --------------------------------------------------------------------------- #
+# Capital-call payments -- Phase C reconciliation
+#
+# Matching money against an APPROVED call. Record-keeping only: the system
+# never moves money and never silently absorbs extra cash (overpayment is a
+# 409, never a write). Reconciled state (unpaid/partial/paid) is derived at
+# read time from sum(payments) vs amount_due -- see _capital_calls_out.
+# --------------------------------------------------------------------------- #
+
+
+@app.get(
+    "/capital-calls/{call_id}/payments",
+    response_model=list[PaymentOut],
+    responses={401: {"model": ErrorOut}, 404: {"model": ErrorOut}},
+)
+def list_capital_call_payments(
+    call_id: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[PaymentOut]:
+    """Payments recorded against a capital call, oldest first."""
+    call = session.get(CapitalCall, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail=f"Capital call {call_id!r} not found")
+    rows = session.execute(
+        select(CapitalCallPayment)
+        .where(CapitalCallPayment.capital_call_id == call_id)
+        .order_by(CapitalCallPayment.paid_date.asc())
+    ).scalars().all()
+    return [PaymentOut.model_validate(p) for p in rows]
+
+
+@app.post(
+    "/capital-calls/{call_id}/payments",
+    response_model=PaymentOut,
+    status_code=201,
+    responses={
+        401: {"model": ErrorOut},
+        404: {"model": ErrorOut},
+        409: {"model": ErrorOut},
+    },
+)
+def record_capital_call_payment(
+    call_id: str,
+    payload: PaymentCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> PaymentOut:
+    """Record a payment received against an APPROVED capital call.
+
+    Gates: the call must exist (404) and be ``approved`` (409) -- payment on
+    a pending or rejected call is refused, the money story follows the
+    approval story. The payment may not exceed the call's remaining balance
+    (409): extra cash is never silently absorbed, a real overpayment needs a
+    human to look at the bank statement and act deliberately. Currency must
+    match the call's currency (409) -- no implicit FX in the ledger.
+    """
+    call = session.get(CapitalCall, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail=f"Capital call {call_id!r} not found")
+    if call.status != CapitalCallStatus.APPROVED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Capital call {call_id!r} is {call.status.value}, "
+            "not approved -- payments can only be recorded against approved calls",
+        )
+    recorded_by = payload.recorded_by.strip()
+    if not recorded_by:
+        raise HTTPException(status_code=409, detail="A named recorder is required")
+    if payload.currency.upper() != call.currency.upper():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Payment currency {payload.currency!r} does not match "
+            f"the call's currency {call.currency!r}",
+        )
+
+    paid = session.execute(
+        select(func.coalesce(func.sum(CapitalCallPayment.amount), 0.0)).where(
+            CapitalCallPayment.capital_call_id == call_id
+        )
+    ).scalar_one()
+    remaining = call.amount_due - float(paid)
+    if payload.amount > remaining + _PAYMENT_TOLERANCE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Payment of {payload.amount} {payload.currency} exceeds the "
+            f"remaining {remaining:.2f} {call.currency} on call {call_id!r} -- "
+            "overpayments are rejected, never absorbed",
+        )
+
+    payment = CapitalCallPayment(
+        id=str(uuid4()),
+        capital_call_id=call_id,
+        amount=payload.amount,
+        currency=call.currency.upper(),
+        paid_date=payload.paid_date,
+        reference=payload.reference,
+        recorded_by=recorded_by,
+    )
+    session.add(payment)
+    session.add(
+        LedgerEntry(
+            id=str(uuid4()),
+            entry_type=LedgerEntryType.CAPITAL_CALL_PAYMENT,
+            instrument_id=call.instrument_id,
+            payload={
+                "event": "capital_call_payment_recorded",
+                "capital_call_id": call_id,
+                "amount": payload.amount,
+                "currency": call.currency.upper(),
+                "paid_date": payload.paid_date.isoformat(),
+                "reference": payload.reference,
+                "recorded_by": recorded_by,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(payment)
+    return PaymentOut.model_validate(payment)

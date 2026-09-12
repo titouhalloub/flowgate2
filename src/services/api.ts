@@ -89,6 +89,8 @@ export function mapCapitalCall(row: Record<string, unknown>): CapitalCall {
     status: ((row.status as string) || 'pending_approval') as CapitalCallStatus,
     source_text: (row.source_text as string) || undefined,
     created_at: (row.created_at as string) || new Date().toISOString(),
+    payment_status: (row.payment_status as CapitalCall['payment_status']) || undefined,
+    remaining: typeof row.remaining === 'number' ? row.remaining : undefined,
   };
 }
 
@@ -197,6 +199,57 @@ export async function reviewCapitalCall(
     { method: 'POST', body: JSON.stringify({ reviewer, action }) }
   );
   return mapCapitalCall(row);
+}
+
+// ---------------------------------------------------------------------------
+// Phase C reconciliation -- payments against approved capital calls
+// ---------------------------------------------------------------------------
+
+export async function listCapitalCallPayments(
+  callId: string
+): Promise<CapitalCallPayment[]> {
+  const rows = await request<Array<Record<string, unknown>>>(
+    `/capital-calls/${callId}/payments`
+  );
+  return rows.map(
+    (row) =>
+      ({
+        id: row.id as string,
+        capital_call_id: row.capital_call_id as string,
+        amount: row.amount as number,
+        currency: (row.currency as string) || 'USD',
+        paid_date: (row.paid_date as string) || new Date().toISOString(),
+        reference: (row.reference as string) || null,
+        recorded_by: (row.recorded_by as string) || 'unknown',
+        created_at: (row.created_at as string) || new Date().toISOString(),
+      }) as CapitalCallPayment
+  );
+}
+
+export async function recordCapitalCallPayment(
+  callId: string,
+  body: {
+    amount: number;
+    currency: string;
+    paid_date?: string;
+    reference?: string;
+    recorded_by: string;
+  }
+): Promise<CapitalCallPayment> {
+  const row = await request<Record<string, unknown>>(
+    `/capital-calls/${callId}/payments`,
+    { method: 'POST', body: JSON.stringify(body) }
+  );
+  return {
+    id: row.id as string,
+    capital_call_id: row.capital_call_id as string,
+    amount: row.amount as number,
+    currency: (row.currency as string) || 'USD',
+    paid_date: (row.paid_date as string) || new Date().toISOString(),
+    reference: (row.reference as string) || null,
+    recorded_by: (row.recorded_by as string) || 'unknown',
+    created_at: (row.created_at as string) || new Date().toISOString(),
+  } as CapitalCallPayment;
 }
 
 export async function listProposals(): Promise<CapTableProposal[]> {

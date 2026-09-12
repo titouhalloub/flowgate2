@@ -569,6 +569,7 @@ export default function App() {
                 capitalCalls={capitalCalls}
                 onCreateCall={handleCreateCapitalCall}
                 onReviewCall={handleReviewCapitalCall}
+                onRefreshCalls={refreshFromServer}
               />
             </div>
           )}
