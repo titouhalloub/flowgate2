@@ -73,7 +73,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
         title="Flowgate"
       >
         <img
-          src="/flowgate-logo.png"
+          src={`${import.meta.env.BASE_URL}flowgate-logo.png`}
           alt="Flowgate"
           className="w-full h-full object-cover"
           referrerPolicy="no-referrer"
