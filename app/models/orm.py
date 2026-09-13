@@ -19,11 +19,13 @@ raises ``ValueError``. Tests in ``tests/test_models.py`` prove this.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -373,6 +375,25 @@ class CapTableEvent(Base):
     effective_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     recorded_at: Mapped[datetime] = mapped_column(default=_utcnow)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    vesting_start_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    vesting_period_months: Mapped[int | None] = mapped_column(nullable=True, default=None)
+    cliff_months: Mapped[int | None] = mapped_column(nullable=True, default=None)
+    acceleration_clause: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    is_repurchase: Mapped[bool] = mapped_column(Boolean, default=False)
+    repurchase_approver: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+
+    @validates("is_repurchase")
+    def _validate_is_repurchase(self, key: str, value: Any) -> bool:
+        val = bool(value)
+        if val and getattr(self, "event_type", None) is not None:
+            evt_type = (
+                self.event_type.value
+                if isinstance(self.event_type, CapTableEventType)
+                else str(self.event_type)
+            )
+            if evt_type != CapTableEventType.CANCELLATION.value:
+                raise ValueError("is_repurchase may only be set on CANCELLATION events.")
+        return val
 
     def __repr__(self) -> str:
         return (

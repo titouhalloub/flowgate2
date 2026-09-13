@@ -109,15 +109,40 @@ export interface LedgerEntry {
 export interface HolderPosition {
   holder_id: string;
   holder_name: string;
+  security_id?: string;
+  security_name?: string;
   shares: number;
   share_class: string;
   ownership_percent: number;
+  /** Non-null only when the position has a vesting schedule */
+  vested_shares?: number;
+  unvested_shares?: number;
+}
+
+export interface GrantVesting {
+  event_id: string;
+  security_id: string;
+  holder_id: string;
+  original_shares: number;
+  total_shares: number;
+  vested_shares: number;
+  unvested_shares: number;
+  transferred_vested_shares: number;
+  repurchased_vested_shares: number;
+  vesting_start_date: string;    // ISO date
+  vesting_period_months: number;
+  cliff_months: number;
+  cliff_date: string;            // ISO date
+  fully_vested_date: string;     // ISO date
+  is_fully_vested: boolean;
+  acceleration_clause?: string;
 }
 
 export interface CapTableSnapshot {
   issuer_name: string;
   total_fully_diluted_shares: number;
   positions: HolderPosition[];
+  grants?: GrantVesting[];
   effective_date: string;
 }
 
@@ -133,6 +158,14 @@ export interface CapTableEvent {
   to_holder_id?: string;
   to_holder_name?: string;
   timestamp: string;
+  // Vesting schedule fields (issuance only)
+  vesting_start_date?: string;    // ISO date
+  vesting_period_months?: number;
+  cliff_months?: number;
+  acceleration_clause?: string;
+  // Repurchase fields (cancellation only)
+  is_repurchase?: boolean;
+  repurchase_approver?: string;
 }
 
 export interface CapTableProposal {

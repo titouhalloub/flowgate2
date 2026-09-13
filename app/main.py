@@ -36,6 +36,7 @@ from app.api_schemas import (
     DocumentSubmit,
     ErrorOut,
     EvidenceDocumentSubmit,
+    GrantVestingOut,
     HoldingCreate,
     HoldingOut,
     HolderPositionOut,
@@ -622,6 +623,24 @@ def record_cap_table_event(
                 status_code=400, detail=f"Investor {holder_id!r} not found"
             )
 
+    if payload.event_type != CapTableEventType.ISSUANCE.value:
+        if (
+            payload.vesting_start_date is not None
+            or payload.vesting_period_months is not None
+            or payload.cliff_months is not None
+            or payload.acceleration_clause is not None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Vesting schedule fields are only permitted on ISSUANCE events",
+            )
+
+    if payload.is_repurchase and payload.event_type != CapTableEventType.CANCELLATION.value:
+        raise HTTPException(
+            status_code=400,
+            detail="is_repurchase may only be True on CANCELLATION events",
+        )
+
     # Phase D governance gate: every proposed TRANSFER is evaluated against
     # the issuer's active rules BEFORE it reaches the append-only log. The
     # engine commits the immutable evaluation row (and its ledger entry for
@@ -673,6 +692,12 @@ def record_cap_table_event(
         price_per_share=payload.price_per_share,
         effective_date=payload.effective_date,
         notes=payload.notes,
+        vesting_start_date=payload.vesting_start_date,
+        vesting_period_months=payload.vesting_period_months,
+        cliff_months=payload.cliff_months,
+        acceleration_clause=payload.acceleration_clause,
+        is_repurchase=payload.is_repurchase,
+        repurchase_approver=payload.repurchase_approver,
     )
     session.add(event)
     try:
@@ -683,14 +708,33 @@ def record_cap_table_event(
     session.refresh(event)
 
     # Validate the whole log is still consistent -- catches an overdraft
-    # transfer/cancellation/exercise at write time (400 + the offending
-    # event rolled back), not silently at the next unrelated read.
+    # transfer/cancellation/exercise/vesting constraint at write time
+    # (409/400 + the offending event rolled back), not silently at the next read.
     try:
         compute_cap_table(session, security.issuer_name)
     except CapTableError as exc:
         session.delete(event)
         session.commit()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        msg = str(exc)
+        status = 409 if any(k in msg.lower() for k in ("vested", "repurchase", "unvested")) else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
+
+    if payload.is_repurchase:
+        session.add(
+            LedgerEntry(
+                id=str(uuid4()),
+                entry_type=LedgerEntryType.CAP_TABLE_EVENT,
+                payload={
+                    "event": "vested_repurchase",
+                    "event_id": event.id,
+                    "security_id": payload.security_id,
+                    "from_holder_id": payload.from_holder_id,
+                    "quantity": payload.quantity,
+                    "repurchase_approver": payload.repurchase_approver,
+                },
+            )
+        )
+        session.commit()
 
     return event
 
@@ -735,6 +779,8 @@ def get_cap_table(
             security_id=p.security_id,
             security_name=securities.get(p.security_id, "unknown"),
             shares=p.shares,
+            vested_shares=p.vested_shares,
+            unvested_shares=p.unvested_shares,
             # Per-position share of the fully-diluted total. The holder's
             # overall percentage is ownership_by_holder -- repeating it on
             # every row invited clients to double-count a holder with
@@ -747,13 +793,38 @@ def get_cap_table(
         for p in snapshot.positions
     ]
 
+    grants_out = [
+        GrantVestingOut(
+            event_id=g.event_id,
+            security_id=g.security_id,
+            holder_id=g.holder_id,
+            original_shares=g.original_shares,
+            total_shares=g.total_shares,
+            vested_shares=g.vested_shares,
+            unvested_shares=g.unvested_shares,
+            transferred_vested_shares=g.transferred_vested_shares,
+            repurchased_vested_shares=g.repurchased_vested_shares,
+            vesting_start_date=g.vesting_start_date,
+            vesting_period_months=g.vesting_period_months,
+            cliff_months=g.cliff_months,
+            cliff_date=g.cliff_date,
+            fully_vested_date=g.fully_vested_date,
+            is_fully_vested=g.is_fully_vested,
+            acceleration_clause=g.acceleration_clause,
+        )
+        for g in snapshot.grants
+    ]
+
     return CapTableOut(
         issuer_name=snapshot.issuer_name,
         as_of=snapshot.as_of,
         total_fully_diluted_shares=total,
+        total_vested_shares=snapshot.total_vested_shares,
+        total_unvested_shares=snapshot.total_unvested_shares,
         shares_by_security=snapshot.shares_by_security,
         ownership_by_holder=ownership,
         positions=positions_out,
+        grants=grants_out,
     )
 
 

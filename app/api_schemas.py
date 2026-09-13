@@ -2,10 +2,10 @@
 app/schemas.py, which model document data, not HTTP payloads."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.enums import (
     CapitalCallStatus,
@@ -196,6 +196,27 @@ class SecurityOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class GrantVestingOut(BaseModel):
+    event_id: str
+    security_id: str
+    holder_id: str
+    original_shares: float
+    total_shares: float
+    vested_shares: float
+    unvested_shares: float
+    transferred_vested_shares: float
+    repurchased_vested_shares: float
+    vesting_start_date: date
+    vesting_period_months: int
+    cliff_months: int
+    cliff_date: date | None = None
+    fully_vested_date: date | None = None
+    is_fully_vested: bool
+    acceleration_clause: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class CapTableEventCreate(BaseModel):
     security_id: str
     target_security_id: str | None = None
@@ -208,6 +229,23 @@ class CapTableEventCreate(BaseModel):
     price_per_share: float | None = Field(default=None, ge=0)
     effective_date: datetime
     notes: str | None = None
+    vesting_start_date: date | None = None
+    vesting_period_months: int | None = Field(default=None, gt=0)
+    cliff_months: int | None = Field(default=None, ge=0)
+    acceleration_clause: str | None = Field(default=None, pattern="^(none|single_trigger|double_trigger)$")
+    is_repurchase: bool = False
+    repurchase_approver: str | None = None
+
+    @model_validator(mode="after")
+    def validate_vesting_and_repurchase(self) -> CapTableEventCreate:
+        if self.cliff_months is not None and self.vesting_period_months is not None:
+            if self.cliff_months > self.vesting_period_months:
+                raise ValueError("cliff_months cannot exceed vesting_period_months")
+        if self.is_repurchase:
+            if not self.repurchase_approver or not self.repurchase_approver.strip():
+                raise ValueError("repurchase_approver is required when is_repurchase is True")
+            self.repurchase_approver = self.repurchase_approver.strip()
+        return self
 
 
 class CapTableEventOut(BaseModel):
@@ -221,6 +259,12 @@ class CapTableEventOut(BaseModel):
     price_per_share: float | None
     effective_date: datetime
     notes: str | None
+    vesting_start_date: date | None = None
+    vesting_period_months: int | None = None
+    cliff_months: int | None = None
+    acceleration_clause: str | None = None
+    is_repurchase: bool = False
+    repurchase_approver: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -231,6 +275,8 @@ class HolderPositionOut(BaseModel):
     security_id: str
     security_name: str
     shares: float
+    vested_shares: float = 0.0
+    unvested_shares: float = 0.0
     # This POSITION's share of the fully-diluted total -- NOT the holder's
     # overall percentage. The holder's total across all their securities is
     # reported once, explicitly, in CapTableOut.ownership_by_holder.
@@ -256,9 +302,12 @@ class CapTableOut(BaseModel):
     issuer_name: str
     as_of: datetime
     total_fully_diluted_shares: float
+    total_vested_shares: float = 0.0
+    total_unvested_shares: float = 0.0
     shares_by_security: dict[str, float]
     ownership_by_holder: dict[str, float]
     positions: list[HolderPositionOut]
+    grants: list[GrantVestingOut] = []
 
 
 # --------------------------------------------------------------------------- #

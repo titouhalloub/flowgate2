@@ -16,6 +16,8 @@ import {
   Users,
   CheckCircle2,
   XCircle,
+  TrendingUp,
+  Lock,
 } from 'lucide-react';
 
 interface CapTableViewProps {
@@ -50,6 +52,17 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   const [sharePrice, setSharePrice] = useState(10.0);
   const [toHolderName, setToHolderName] = useState('');
   const [formError, setFormError] = useState('');
+
+  // Vesting schedule form state
+  const [enableVesting, setEnableVesting] = useState(false);
+  const [vestingStartDate, setVestingStartDate] = useState('');
+  const [vestingPeriodMonths, setVestingPeriodMonths] = useState(48);
+  const [cliffMonths, setCliffMonths] = useState(12);
+  const [accelerationClause, setAccelerationClause] = useState('');
+
+  // Cancellation / repurchase
+  const [isRepurchase, setIsRepurchase] = useState(false);
+  const [repurchaseApprover, setRepurchaseApprover] = useState('');
 
   const colors = [
     'bg-[#FAB005]',
@@ -97,10 +110,25 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
       share_price: sharePrice,
       to_holder_id: toHolderName ? 'inv_' + toHolderName.toLowerCase().replace(/[^a-z0-9]/g, '_') : undefined,
       to_holder_name: toHolderName || undefined,
+      // Vesting
+      ...(eventType === 'issuance' && enableVesting && vestingStartDate ? {
+        vesting_start_date: vestingStartDate,
+        vesting_period_months: vestingPeriodMonths,
+        cliff_months: cliffMonths,
+        acceleration_clause: accelerationClause || undefined,
+      } : {}),
+      // Repurchase
+      ...(eventType === 'cancellation' ? {
+        is_repurchase: isRepurchase,
+        repurchase_approver: isRepurchase ? repurchaseApprover : undefined,
+      } : {}),
     });
 
     setHolderName('');
     setToHolderName('');
+    setEnableVesting(false);
+    setIsRepurchase(false);
+    setRepurchaseApprover('');
     setShowEventModal(false);
   };
 
@@ -248,28 +276,54 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
                   <th className="px-3 py-2.5">Class</th>
                   <th className="px-3 py-2.5 text-right">Shares</th>
                   <th className="px-3 py-2.5 text-right">Ownership</th>
+                  <th className="px-3 py-2.5 text-right">Vested</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-gray-800">
-                {snapshot.positions.map((p, idx) => (
-                  <tr key={p.holder_id} className="hover:bg-gray-50/60 transition-colors">
-                    <td className="px-3 py-3 font-medium flex items-center gap-2">
-                      <div className={`w-2.5 h-2.5 rounded-full ${colors[idx % colors.length]}`} />
-                      <span className="font-bold text-gray-900">{p.holder_name}</span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#F4F6FC] border border-gray-200 text-gray-600">
-                        {p.share_class}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-right font-mono font-semibold">
-                      {p.shares.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-3 text-right font-mono font-bold text-[#7048E8]">
-                      {p.ownership_percent.toFixed(2)}%
-                    </td>
-                  </tr>
-                ))}
+                {snapshot.positions.map((p, idx) => {
+                  const hasVesting = p.vested_shares !== undefined;
+                  const vestedPct = hasVesting && p.shares > 0
+                    ? Math.round((p.vested_shares! / p.shares) * 100)
+                    : null;
+                  return (
+                    <tr key={`${p.holder_id}-${p.security_id ?? idx}`} className="hover:bg-gray-50/60 transition-colors">
+                      <td className="px-3 py-3 font-medium flex items-center gap-2">
+                        <div className={`w-2.5 h-2.5 rounded-full ${colors[idx % colors.length]}`} />
+                        <span className="font-bold text-gray-900">{p.holder_name}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#F4F6FC] border border-gray-200 text-gray-600">
+                          {p.share_class}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-semibold">
+                        {p.shares.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-bold text-[#7048E8]">
+                        {p.ownership_percent.toFixed(2)}%
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {hasVesting ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex items-center gap-1.5 text-[10px]">
+                              <span className="text-emerald-600 font-bold">{p.vested_shares!.toLocaleString()}</span>
+                              <span className="text-gray-400">/</span>
+                              <span className="text-amber-600 font-semibold">{p.unvested_shares!.toLocaleString()} unvested</span>
+                            </div>
+                            <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-emerald-500 transition-all"
+                                style={{ width: `${vestedPct}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-[10px]">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -394,6 +448,112 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Grants & Vesting Schedules Panel — only shown when grants present */}
+      {snapshot.grants && snapshot.grants.length > 0 && (
+        <div className="bg-white rounded-2xl p-5 sm:p-6 shadow-xs border border-gray-100 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                <TrendingUp className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-gray-900">Grants &amp; Vesting Schedules</h3>
+                <p className="text-[11px] text-gray-500">Point-in-time vesting computed by the server engine</p>
+              </div>
+            </div>
+            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+              {snapshot.grants.length} Active Grants
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-gray-50/80 text-gray-500 font-semibold border-b border-gray-100">
+                <tr>
+                  <th className="px-3 py-2.5">Holder</th>
+                  <th className="px-3 py-2.5 text-right">Total Shares</th>
+                  <th className="px-3 py-2.5 text-right">Vested</th>
+                  <th className="px-3 py-2.5 text-right">Unvested</th>
+                  <th className="px-3 py-2.5">Progress</th>
+                  <th className="px-3 py-2.5">Cliff</th>
+                  <th className="px-3 py-2.5">Fully Vested</th>
+                  <th className="px-3 py-2.5">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 text-gray-800">
+                {snapshot.grants.map((g) => {
+                  const pct = g.total_shares > 0
+                    ? Math.round((g.vested_shares / g.total_shares) * 100)
+                    : 0;
+                  return (
+                    <tr key={g.event_id} className="hover:bg-gray-50/60 transition-colors">
+                      <td className="px-3 py-3">
+                        <span className="font-bold text-gray-900">{g.holder_id}</span>
+                        <div className="text-[10px] text-gray-400 mt-0.5">
+                          {g.vesting_period_months}m / {g.cliff_months}m cliff
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-semibold">
+                        {g.total_shares.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-bold text-emerald-600">
+                        {g.vested_shares.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-semibold text-amber-600">
+                        {g.unvested_shares.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-24 h-2 rounded-full bg-gray-200 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-emerald-500 transition-all"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-bold text-gray-600">{pct}%</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-gray-600 text-[11px]">
+                        {g.cliff_date}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-gray-600 text-[11px]">
+                        {g.fully_vested_date}
+                      </td>
+                      <td className="px-3 py-3">
+                        {g.is_fully_vested ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Fully Vested
+                          </span>
+                        ) : g.acceleration_clause ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                            Accel. Clause
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                            Vesting
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Self-declared approver disclosure note */}
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800 flex items-start gap-2">
+            <Lock className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              <strong>Governance note:</strong> In the current shared-API-key model, the{' '}
+              <code className="font-mono">repurchase_approver</code> field is self-declared and creates an audit trail
+              rather than enforcing authorization. Once per-user auth lands, this field must be bound to an
+              authenticated principal.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Append-Only Cap Table Event Log Replay */}
       <div className="bg-white rounded-2xl p-5 sm:p-6 shadow-xs border border-gray-100 space-y-4">
@@ -549,6 +709,101 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
                   </select>
                 </div>
               </div>
+
+              {/* Vesting Schedule — issuance only */}
+              {eventType === 'issuance' && (
+                <div className="border border-gray-200 rounded-xl p-3 space-y-3 bg-gray-50/50">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enableVesting}
+                      onChange={(e) => setEnableVesting(e.target.checked)}
+                      className="accent-[#7048E8]"
+                    />
+                    <span className="text-xs font-bold text-gray-700">Add Vesting Schedule</span>
+                    <span className="text-[10px] text-gray-400 ml-auto">NVCA/Carta calendar-month</span>
+                  </label>
+
+                  {enableVesting && (
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <label className="block text-gray-500 font-semibold text-[11px] mb-1">VESTING START DATE</label>
+                        <input
+                          type="date"
+                          value={vestingStartDate}
+                          onChange={(e) => setVestingStartDate(e.target.value)}
+                          className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 text-xs focus:border-[#7048E8] outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-gray-500 font-semibold text-[11px] mb-1">VEST PERIOD (months)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={vestingPeriodMonths}
+                            onChange={(e) => setVestingPeriodMonths(parseInt(e.target.value, 10) || 48)}
+                            className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 font-mono text-xs focus:border-[#7048E8] outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-gray-500 font-semibold text-[11px] mb-1">CLIFF (months)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={cliffMonths}
+                            onChange={(e) => setCliffMonths(parseInt(e.target.value, 10) || 0)}
+                            className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 font-mono text-xs focus:border-[#7048E8] outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-gray-500 font-semibold text-[11px] mb-1">ACCELERATION CLAUSE (optional)</label>
+                        <input
+                          type="text"
+                          value={accelerationClause}
+                          onChange={(e) => setAccelerationClause(e.target.value)}
+                          placeholder="e.g. Single-trigger on Change of Control"
+                          className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 text-xs focus:border-[#7048E8] outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Repurchase — cancellation only */}
+              {eventType === 'cancellation' && (
+                <div className="border border-gray-200 rounded-xl p-3 space-y-3 bg-gray-50/50">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isRepurchase}
+                      onChange={(e) => setIsRepurchase(e.target.checked)}
+                      className="accent-[#7048E8]"
+                    />
+                    <span className="text-xs font-bold text-gray-700">Board-Approved Repurchase</span>
+                    <span className="text-[10px] text-gray-400 ml-auto">targets vested shares</span>
+                  </label>
+                  {isRepurchase && (
+                    <div>
+                      <label className="block text-gray-500 font-semibold text-[11px] mb-1">APPROVER NAME (required)</label>
+                      <input
+                        type="text"
+                        value={repurchaseApprover}
+                        onChange={(e) => setRepurchaseApprover(e.target.value)}
+                        placeholder="e.g. Jane Smith (Board Chair)"
+                        className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 text-xs focus:border-[#7048E8] outline-none"
+                      />
+                    </div>
+                  )}
+                  {!isRepurchase && (
+                    <p className="text-[10px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 border border-amber-200">
+                      Leaver forfeiture: will cancel unvested shares only. Vested shares are retained by the holder.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="pt-3 flex justify-end gap-2 border-t border-gray-100">
                 <button
