@@ -1,3 +1,4 @@
+// Vesting math mirrors app/captable.py. When the backend formula changes, this must change in the same commit.
 import {
   ComplianceMode,
   DocumentType,
@@ -511,13 +512,77 @@ export function evaluateCompliance(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Vesting arithmetic -- a line-for-line port of app/captable.py so the
+// client-replayed cap table shows the same vested/unvested split the API
+// computes from the same events.
+// ---------------------------------------------------------------------------
+
+/** Parse an event date into a Date. Bare 'YYYY-MM-DD' strings (the Record
+ * Event modal's date input) are pinned to UTC midnight so calendar-month
+ * anniversaries never drift a day with the viewer's timezone. */
+function _parseUtcDate(value: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(value + 'T00:00:00Z')
+    : new Date(value);
+}
+
+function _utcToday(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/** Add `months` calendar months to `d`, with month-end clipping
+ * (mirror of _add_months in app/captable.py: Jan 31 + 1 month = Feb 28). */
+function _addUtcMonths(d: Date, months: number): Date {
+  const monthIndex = d.getUTCFullYear() * 12 + d.getUTCMonth() + months;
+  const year = Math.floor(monthIndex / 12);
+  const month = monthIndex - year * 12;
+  // Day 0 of the following month = last day of `month`.
+  const maxDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(d.getUTCDate(), maxDay)));
+}
+
+/** Integer count of completed calendar-month anniversaries between `start`
+ * and `asOf` (mirror of completed_anniversary_months in app/captable.py).
+ * Returns 0 when asOf < start. */
+function _completedAnniversaryMonths(start: Date, asOf: Date): number {
+  if (asOf < start) return 0;
+  const approx =
+    (asOf.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (asOf.getUTCMonth() - start.getUTCMonth());
+  if (_addUtcMonths(start, approx) <= asOf) return approx;
+  return Math.max(0, approx - 1);
+}
+
+/** Cumulative vested shares for a single issuance event as of `asOf`
+ * (mirror of GrantVesting.cumulative_vested_at): no schedule -> fully
+ * vested; before the start date or below the cliff -> 0; otherwise
+ * total x (elapsed / period), capped at 100%. */
+function _vestedSharesForEvent(ev: CapTableEvent, asOf: Date): number {
+  const period = ev.vesting_period_months ?? 0;
+  if (period <= 0 || !ev.vesting_start_date) return ev.share_count;
+  const start = _parseUtcDate(ev.vesting_start_date);
+  if (asOf < start) return 0;
+  const elapsed = _completedAnniversaryMonths(start, asOf);
+  if (elapsed < (ev.cliff_months ?? 0)) return 0;
+  const ratio = Math.min(1, elapsed / period);
+  return ev.share_count * ratio;
+}
+
 // Event-Sourced Cap Table Replay Engine
 export function computeCapTable(events: CapTableEvent[], issuer?: string): CapTableSnapshot {
   const issuerEvents = (!issuer || issuer === 'all')
     ? events
     : events.filter((e) => e.issuer_name.toLowerCase() === issuer.toLowerCase());
 
-  const positionsMap = new Map<string, { name: string; shares: number; share_class: string }>();
+  const asOf = _utcToday();
+  const positionsMap = new Map<
+    string,
+    { name: string; shares: number; share_class: string; vested: number; unvested: number }
+  >();
 
   for (const ev of issuerEvents) {
     if (ev.event_type === 'issuance') {
@@ -525,26 +590,48 @@ export function computeCapTable(events: CapTableEvent[], issuer?: string): CapTa
         name: ev.holder_name,
         shares: 0,
         share_class: ev.share_class,
+        vested: 0,
+        unvested: 0,
       };
+      const vested = _vestedSharesForEvent(ev, asOf);
       current.shares += ev.share_count;
+      current.vested += vested;
+      current.unvested += ev.share_count - vested;
       positionsMap.set(ev.holder_id, current);
     } else if (ev.event_type === 'transfer') {
       const from = positionsMap.get(ev.holder_id);
       if (from && from.shares >= ev.share_count) {
-        from.shares -= ev.share_count;
+        // Unvested shares leave first (the backend blocks unvested transfers
+        // and cancels unvested shares first on repurchase). Keeps the
+        // invariant vested + unvested == shares on both sides.
+        const take = ev.share_count;
+        const fromUnvested = Math.min(from.unvested, take);
+        from.unvested -= fromUnvested;
+        from.vested -= take - fromUnvested;
+        from.shares -= take;
         const toId = ev.to_holder_id || 'unknown';
         const to = positionsMap.get(toId) || {
           name: ev.to_holder_name || 'Transferee',
           shares: 0,
           share_class: ev.share_class,
+          vested: 0,
+          unvested: 0,
         };
-        to.shares += ev.share_count;
+        // Transferred shares keep their original vesting state.
+        to.shares += take;
+        to.vested += take - fromUnvested;
+        to.unvested += fromUnvested;
         positionsMap.set(toId, to);
       }
     } else if (ev.event_type === 'cancellation') {
       const holder = positionsMap.get(ev.holder_id);
       if (holder && holder.shares >= ev.share_count) {
-        holder.shares -= ev.share_count;
+        // Unvested shares are cancelled first (leaver forfeiture).
+        const take = ev.share_count;
+        const fromUnvested = Math.min(holder.unvested, take);
+        holder.unvested -= fromUnvested;
+        holder.vested -= take - fromUnvested;
+        holder.shares -= take;
       }
     }
   }
@@ -562,6 +649,8 @@ export function computeCapTable(events: CapTableEvent[], issuer?: string): CapTa
         holder_name: pos.name,
         shares: pos.shares,
         share_class: pos.share_class,
+        vested_shares: pos.vested,
+        unvested_shares: pos.unvested,
         ownership_percent: totalShares > 0 ? Number(((pos.shares / totalShares) * 100).toFixed(2)) : 0,
       });
     }
