@@ -655,6 +655,9 @@ Certification: The structure described is reviewed and approved as Shariah-compl
         share_count: 8000000,
         share_class: 'Common',
         share_price: 1.0,
+        vesting_start_date: '2024-01-01',
+        vesting_period_months: 48,
+        cliff_months: 12,
         timestamp: new Date(Date.now() - 200 * 86400000).toISOString(),
       },
     ];
@@ -669,6 +672,9 @@ Certification: The structure described is reviewed and approved as Shariah-compl
           quantity: 8000000,
           price_per_share: 1.0,
           effective_date: new Date(Date.now() - 200 * 86400000).toISOString(),
+          vesting_start_date: '2024-01-01',
+          vesting_period_months: 48,
+          cliff_months: 12,
         });
       } catch {
         // Backend unreachable -- demo fallback below.
