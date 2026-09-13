@@ -26,6 +26,19 @@ import {
 import { Shield, Sparkles, AlertCircle, ExternalLink, Search, Bell, X } from 'lucide-react';
 import * as liveApi from './services/api';
 
+// True when the backend actively REJECTED the request (4xx). These are
+// validation/compliance refusals (e.g. the 409A below-FMV gate), never
+// outages -- surface the detail to the user and never demo-fall back
+// (a silent fallback would fake a success). Network failures and 5xx
+// keep the demo fallback.
+function isClientRejection(err: unknown): err is liveApi.ApiRequestError {
+  return (
+    err instanceof liveApi.ApiRequestError &&
+    err.status >= 400 &&
+    err.status < 500
+  );
+}
+
 export default function App() {
   // Default active tab to the modern dashboard requested by user
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -222,11 +235,7 @@ export default function App() {
             eventData.repurchase_approver || evt.repurchase_approver,
         };
       } catch (err) {
-        if (
-          err instanceof liveApi.ApiRequestError &&
-          err.status >= 400 &&
-          err.status < 500
-        ) {
+        if (isClientRejection(err)) {
           // The backend REJECTED the event (validation, 409A below-FMV
           // gate, ...). Never demo-fall back for a compliance rejection:
           // surface the detail and leave the ledger untouched.
@@ -264,8 +273,14 @@ export default function App() {
     if (liveApi.isLive()) {
       try {
         await liveApi.approveProposal(proposalId, reviewer);
-      } catch {
-        // Backend unreachable -- demo fallback below.
+      } catch (err) {
+        if (isClientRejection(err)) {
+          // Backend REJECTED the approval (review gate, already reviewed,
+          // ...) -- surface it, never fake success locally.
+          setErrorBoxMsg(err.message);
+          return;
+        }
+        // Network failure or 5xx -- demo fallback below.
       }
     }
 
@@ -319,8 +334,14 @@ export default function App() {
     if (liveApi.isLive()) {
       try {
         await liveApi.rejectProposal(proposalId, reviewer);
-      } catch {
-        // Backend unreachable -- demo fallback below.
+      } catch (err) {
+        if (isClientRejection(err)) {
+          // Backend REJECTED the rejection -- surface it, never fake
+          // success locally.
+          setErrorBoxMsg(err.message);
+          return;
+        }
+        // Network failure or 5xx -- demo fallback below.
       }
     }
 
@@ -357,8 +378,14 @@ export default function App() {
     if (liveApi.isLive()) {
       try {
         await liveApi.linkInvestor(proposalId, investorId, 'M. Vance — Audit Lead');
-      } catch {
-        // Backend unreachable -- demo fallback below.
+      } catch (err) {
+        if (isClientRejection(err)) {
+          // Backend REJECTED the link (unknown investor/proposal, ...)
+          // -- surface it, never fake success locally.
+          setErrorBoxMsg(err.message);
+          return;
+        }
+        // Network failure or 5xx -- demo fallback below.
       }
     }
 
@@ -406,8 +433,14 @@ export default function App() {
 
           setLedgerEntries((prev) => [entry, ...prev]);
           return;
-        } catch {
-          // Backend unreachable -- demo fallback below.
+        } catch (err) {
+          if (isClientRejection(err)) {
+            // Backend REJECTED the call (validation, unknown funder, ...)
+            // -- surface it, never add a demo call that looks accepted.
+            setErrorBoxMsg(err.message);
+            return;
+          }
+          // Network failure or 5xx -- demo fallback below.
         }
       }
 
@@ -474,8 +507,14 @@ export default function App() {
 
           setLedgerEntries((prev) => [entry, ...prev]);
           return;
-        } catch {
-          // Backend unreachable -- demo fallback below.
+        } catch (err) {
+          if (isClientRejection(err)) {
+            // Backend REJECTED the review (already reviewed, unknown call,
+            // ...) -- surface it, never fake success locally.
+            setErrorBoxMsg(err.message);
+            return;
+          }
+          // Network failure or 5xx -- demo fallback below.
         }
       }
 
@@ -545,6 +584,20 @@ export default function App() {
 
         {/* Dynamic View Container */}
         <main className="flex-1 p-4 sm:p-7 max-w-7xl w-full mx-auto">
+          {/* Global backend-rejection banner (4xx from any live handler:
+              409A gate, review gates, validation). Visible in every tab. */}
+          {errorBoxMsg && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-700 flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                <span>{errorBoxMsg}</span>
+              </div>
+              <button onClick={() => setErrorBoxMsg('')} className="text-red-500 hover:text-red-700 cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {activeTab === 'dashboard' && bootstrapped && (
             <FlowgateDashboard
               initialEvents={capTableEvents}
@@ -604,17 +657,6 @@ export default function App() {
                   Back to Dashboard
                 </button>
               </div>
-              {errorBoxMsg && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-700 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                    <span>{errorBoxMsg}</span>
-                  </div>
-                  <button onClick={() => setErrorBoxMsg('')} className="text-red-500 hover:text-red-700 cursor-pointer">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
               <CapTableView
                 snapshot={capTableSnapshot}
                 events={capTableEvents}
