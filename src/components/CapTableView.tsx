@@ -759,6 +759,25 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
                 </div>
               </div>
 
+              {/* Price per share — issuance only. For option grants this is
+                  the strike price the backend's 409A gate compares against
+                  the recorded FMV; a strike below the FMV is rejected. */}
+              {eventType === 'issuance' && (
+                <div>
+                  <label className="block text-gray-500 font-semibold text-[11px] mb-1">
+                    PRICE PER SHARE ($)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={sharePrice}
+                    onChange={(e) => setSharePrice(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-[#F4F6FC] border border-gray-200 rounded-lg p-2 text-gray-900 font-mono text-xs focus:border-[#7048E8] outline-none"
+                  />
+                </div>
+              )}
+
               {/* Vesting Schedule — issuance only */}
               {eventType === 'issuance' && (
                 <div className="border border-gray-200 rounded-xl p-3 space-y-3 bg-gray-50/50">
