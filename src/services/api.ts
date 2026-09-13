@@ -43,6 +43,19 @@ function cleanBase(): string {
   return apiBase.replace(/\/$/, '');
 }
 
+// Error thrown by `request` on a non-2xx response. Carries the HTTP status
+// so live handlers can tell a backend REJECTION (4xx -- surface the detail
+// to the user, never demo-fall back) apart from an outage (network failure
+// or 5xx -- demo fallback is safe).
+export class ApiRequestError extends Error {
+  status: number;
+  constructor(status: number, detail: string) {
+    super(detail);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isForm = init.body instanceof FormData;
   const res = await fetch(`${cleanBase()}${path}`, {
@@ -51,7 +64,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(
+    throw new ApiRequestError(
+      res.status,
       (err as Record<string, string>).detail ||
         `Request failed (${res.status}): ${path}`
     );

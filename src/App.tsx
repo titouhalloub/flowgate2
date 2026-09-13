@@ -23,7 +23,7 @@ import {
   computeCapTable,
   generateTraceId,
 } from './services/flowgateEngine';
-import { Shield, Sparkles, AlertCircle, ExternalLink, Search, Bell } from 'lucide-react';
+import { Shield, Sparkles, AlertCircle, ExternalLink, Search, Bell, X } from 'lucide-react';
 import * as liveApi from './services/api';
 
 export default function App() {
@@ -35,6 +35,10 @@ export default function App() {
   const [capTableEvents, setCapTableEvents] = useState<CapTableEvent[]>(INITIAL_CAP_TABLE_EVENTS);
   // 409A context for the cap table (live API only; null in demo mode).
   const [latest409a, setLatest409a] = useState<LatestValuation | null>(null);
+  // Backend rejection detail for the cap table (e.g. a 409A below-FMV gate
+  // refusal). Rendered as a dismissible error box; demo fallback never runs
+  // for these, because a compliance rejection is not an outage.
+  const [errorBoxMsg, setErrorBoxMsg] = useState<string>('');
   const [proposals, setProposals] = useState<CapTableProposal[]>([
     {
       id: 'prop_seed_1',
@@ -140,6 +144,7 @@ export default function App() {
   // event on the backend; falls back to the local demo engine when offline)
   const handleRecordEvent = async (eventData: Omit<CapTableEvent, 'id' | 'timestamp'>) => {
     const traceId = generateTraceId();
+    setErrorBoxMsg('');
     let newEvent: CapTableEvent = {
       ...eventData,
       id: 'cte_' + Math.random().toString(36).substring(2, 9),
@@ -216,8 +221,19 @@ export default function App() {
           repurchase_approver:
             eventData.repurchase_approver || evt.repurchase_approver,
         };
-      } catch {
-        // Backend unreachable -- demo fallback below.
+      } catch (err) {
+        if (
+          err instanceof liveApi.ApiRequestError &&
+          err.status >= 400 &&
+          err.status < 500
+        ) {
+          // The backend REJECTED the event (validation, 409A below-FMV
+          // gate, ...). Never demo-fall back for a compliance rejection:
+          // surface the detail and leave the ledger untouched.
+          setErrorBoxMsg(err.message);
+          return;
+        }
+        // Network failure or 5xx -- demo fallback below.
       }
     }
 
@@ -588,6 +604,17 @@ export default function App() {
                   Back to Dashboard
                 </button>
               </div>
+              {errorBoxMsg && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-700 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <span>{errorBoxMsg}</span>
+                  </div>
+                  <button onClick={() => setErrorBoxMsg('')} className="text-red-500 hover:text-red-700 cursor-pointer">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               <CapTableView
                 snapshot={capTableSnapshot}
                 events={capTableEvents}
