@@ -308,6 +308,42 @@ class CapTableOut(BaseModel):
     ownership_by_holder: dict[str, float]
     positions: list[HolderPositionOut]
     grants: list[GrantVestingOut] = []
+    # 409A context: the FMV in effect as of the snapshot date, its date,
+    # and the staleness nag (older than 12 months -> needs refreshing,
+    # but it still floors strike prices until a new valuation lands).
+    latest_409a_price: float | None = None
+    latest_409a_date: datetime | None = None
+    latest_409a_stale: bool = False
+
+
+class ValuationCreate(BaseModel):
+    issuer_name: str = Field(..., min_length=1)
+    valuation_date: datetime
+    price_per_share: float = Field(gt=0)
+    valuation_type: str = Field(..., pattern="^(fmv_409a|preferred_price_round)$")
+    method: str | None = None
+    notes: str | None = None
+
+
+class ValuationOut(BaseModel):
+    id: str
+    issuer_name: str
+    valuation_date: datetime
+    price_per_share: float
+    valuation_type: str
+    method: str | None = None
+    notes: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class LatestValuationOut(ValuationOut):
+    """The current valuation of a given type, plus the compliance nag: a
+    409A older than 12 months is stale (warning only, never a block)."""
+
+    is_stale: bool
+    months_old: float
 
 
 # --------------------------------------------------------------------------- #

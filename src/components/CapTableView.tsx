@@ -5,6 +5,7 @@ import {
   CapTableProposal,
   Investor,
   CapTableEventType,
+  LatestValuation,
 } from '../types';
 import {
   PlusCircle,
@@ -25,6 +26,8 @@ interface CapTableViewProps {
   events: CapTableEvent[];
   proposals: CapTableProposal[];
   investors: Investor[];
+  /** Current 409A FMV from the live API (null in demo mode / none on file). */
+  latest409a?: LatestValuation | null;
   onRecordEvent: (event: Omit<CapTableEvent, 'id' | 'timestamp'>) => void;
   onApproveProposal: (proposalId: string, reviewer: string) => void;
   onRejectProposal: (proposalId: string, reviewer: string) => void;
@@ -36,6 +39,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   events,
   proposals,
   investors,
+  latest409a,
   onRecordEvent,
   onApproveProposal,
   onRejectProposal,
@@ -84,6 +88,23 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
 
     if (shareCount <= 0) {
       setFormError('Share count must be greater than zero.');
+      return;
+    }
+
+    // Vesting schedule guard: a vesting issuance needs a start date and a
+    // positive vesting period (cliff may be 0, so no lower-bound check there).
+    if (eventType === 'issuance' && enableVesting && !vestingStartDate) {
+      setFormError('Vesting start date is required when a vesting schedule is enabled.');
+      return;
+    }
+    if (eventType === 'issuance' && enableVesting && vestingStartDate && vestingPeriodMonths <= 0) {
+      setFormError('Vesting period must be greater than zero months.');
+      return;
+    }
+
+    // Repurchase guard: the backend requires a named approver on repurchases.
+    if (eventType === 'cancellation' && isRepurchase && !repurchaseApprover.trim()) {
+      setFormError('Repurchase approver name is required for board-approved repurchases.');
       return;
     }
 
@@ -203,6 +224,34 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* 409A FMV context strip -- hidden entirely in demo mode / when no
+            valuation is on file. Staleness is a nag, never a block: the
+            stale FMV still floors strike prices until a new one lands. */}
+        {latest409a && (
+          <div
+            className={`mt-4 flex flex-wrap items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-medium ${
+              latest409a.is_stale
+                ? 'bg-[#FFF4E5] text-[#9A6A1B] border border-[#F5D9A8]'
+                : 'bg-white/70 text-gray-600 border border-white'
+            }`}
+          >
+            <Shield className="w-4 h-4 shrink-0" />
+            <span>
+              Latest 409A FMV:{' '}
+              <strong className="font-bold">
+                ${latest409a.price_per_share.toFixed(2)}/share
+              </strong>{' '}
+              (effective {new Date(latest409a.valuation_date).toLocaleDateString()})
+              {latest409a.method ? ` — ${latest409a.method}` : ''}
+            </span>
+            {latest409a.is_stale && (
+              <span className="ml-auto font-bold uppercase tracking-wide">
+                ⚠ {Math.round(latest409a.months_old)} months old — refresh recommended
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Visual Ownership Segmented Bar Card */}
@@ -759,13 +808,15 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
                       </div>
                       <div>
                         <label className="block text-gray-500 font-semibold text-[11px] mb-1">ACCELERATION CLAUSE (optional)</label>
-                        <input
-                          type="text"
+                        <select
                           value={accelerationClause}
                           onChange={(e) => setAccelerationClause(e.target.value)}
-                          placeholder="e.g. Single-trigger on Change of Control"
                           className="w-full bg-white border border-gray-200 rounded-lg p-2 text-gray-900 text-xs focus:border-[#7048E8] outline-none"
-                        />
+                        >
+                          <option value="">None</option>
+                          <option value="single_trigger">Single-trigger</option>
+                          <option value="double_trigger">Double-trigger</option>
+                        </select>
                       </div>
                     </div>
                   )}

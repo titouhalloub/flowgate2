@@ -146,6 +146,17 @@ export interface CapTableSnapshot {
   effective_date: string;
 }
 
+export interface LatestValuation {
+  id: string;
+  issuer_name: string;
+  valuation_date: string;        // ISO datetime
+  price_per_share: number;
+  valuation_type: string;        // 'fmv_409a' | 'preferred_price_round'
+  method?: string;
+  is_stale: boolean;             // 409A older than 12 months (nag, not a block)
+  months_old: number;
+}
+
 export interface CapTableEvent {
   id: string;
   issuer_name: string;

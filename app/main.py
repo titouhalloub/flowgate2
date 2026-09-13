@@ -55,6 +55,9 @@ from app.api_schemas import (
     TransferEvaluationOut,
     TransferRuleCreate,
     TransferRuleOut,
+    ValuationCreate,
+    ValuationOut,
+    LatestValuationOut,
 )
 from app.captable import CapTableError, compute_cap_table
 from app.compliance import ComplianceGateway
@@ -75,6 +78,7 @@ from app.models.enums import (
     TransferEvaluationOutcome,
     TransferGate,
     TransferRuleType,
+    ValuationType,
 )
 from app.models.orm import (
     CapTableEvent,
@@ -89,6 +93,7 @@ from app.models.orm import (
     Security as SecurityModel,
     TransferEvaluation,
     TransferRule,
+    Valuation,
 )
 from app.models.orm import _utcnow
 from app.pipeline import process_document
@@ -641,6 +646,39 @@ def record_cap_table_event(
             detail="is_repurchase may only be True on CANCELLATION events",
         )
 
+    # 409A compliance gate: an option (or warrant) struck below the fair
+    # market value in effect on the grant date is a Section 409A violation
+    # -- the grantee owes immediate tax and penalties -- so the compliance
+    # gateway refuses to record it. The FMV that applies is the latest 409A
+    # valuation dated on or before the event's effective date; with no 409A
+    # on file yet there is nothing to violate and issuance proceeds. Common
+    # and preferred issuances are not strikes and are never gated.
+    if (
+        payload.event_type == CapTableEventType.ISSUANCE.value
+        and payload.price_per_share is not None
+        and security.security_type in (SecurityType.OPTION, SecurityType.WARRANT)
+    ):
+        fmv = session.execute(
+            select(Valuation)
+            .where(
+                Valuation.issuer_name == security.issuer_name,
+                Valuation.valuation_type == ValuationType.FMV_409A,
+                Valuation.valuation_date <= payload.effective_date,
+            )
+            .order_by(Valuation.valuation_date.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if fmv is not None and payload.price_per_share < fmv.price_per_share:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Strike price {payload.price_per_share} is below the 409A "
+                    f"fair market value of {fmv.price_per_share} in effect "
+                    f"since {fmv.valuation_date.date().isoformat()} -- a "
+                    "below-FMV grant violates Section 409A"
+                ),
+            )
+
     # Phase D governance gate: every proposed TRANSFER is evaluated against
     # the issuer's active rules BEFORE it reaches the append-only log. The
     # engine commits the immutable evaluation row (and its ledger entry for
@@ -815,6 +853,21 @@ def get_cap_table(
         for g in snapshot.grants
     ]
 
+    # 409A context: the FMV in effect as of the snapshot date (latest
+    # 409A valuation dated on or before it), plus the staleness nag --
+    # a 409A older than 12 months needs refreshing, but it still floors
+    # strike prices until a new valuation lands.
+    fmv = session.execute(
+        select(Valuation)
+        .where(
+            Valuation.issuer_name == issuer_name,
+            Valuation.valuation_type == ValuationType.FMV_409A,
+            Valuation.valuation_date <= snapshot.as_of,
+        )
+        .order_by(Valuation.valuation_date.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
     return CapTableOut(
         issuer_name=snapshot.issuer_name,
         as_of=snapshot.as_of,
@@ -825,6 +878,130 @@ def get_cap_table(
         ownership_by_holder=ownership,
         positions=positions_out,
         grants=grants_out,
+        latest_409a_price=fmv.price_per_share if fmv is not None else None,
+        latest_409a_date=fmv.valuation_date if fmv is not None else None,
+        latest_409a_stale=(
+            fmv is not None
+            and _months_old(fmv.valuation_date, snapshot.as_of) > _STALE_AFTER_MONTHS
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 409A valuations -- record-keeping for issuer fair market value
+# (CAPTABLE-ROADMAP-FEATURES.md Feature 2)
+# ---------------------------------------------------------------------------
+
+# A 409A older than 12 months is stale: surfaced as a warning (nag) on the
+# latest-valuation read and the cap table -- never a hard block.
+_STALE_AFTER_MONTHS = 12.0
+
+
+def _months_old(valuation_date: datetime, ref: datetime) -> float:
+    """Age of a valuation in (average) months, naive/aware safe."""
+    a = valuation_date if valuation_date.tzinfo else valuation_date.replace(tzinfo=timezone.utc)
+    b = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
+    return max(0.0, (b - a).days / 30.4375)
+
+
+@app.post(
+    "/valuations",
+    response_model=ValuationOut,
+    status_code=201,
+    responses={401: {"model": ErrorOut}},
+)
+def record_valuation(
+    payload: ValuationCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> Valuation:
+    valuation = Valuation(
+        id=str(uuid4()),
+        issuer_name=payload.issuer_name,
+        valuation_date=payload.valuation_date,
+        price_per_share=payload.price_per_share,
+        valuation_type=ValuationType(payload.valuation_type),
+        method=payload.method,
+        notes=payload.notes,
+    )
+    session.add(valuation)
+    session.commit()
+    session.refresh(valuation)
+    return valuation
+
+
+@app.get(
+    "/valuations/{issuer_name}",
+    response_model=list[ValuationOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_valuations(
+    issuer_name: str,
+    valuation_type: str | None = Query(
+        default=None, pattern="^(fmv_409a|preferred_price_round)$"
+    ),
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[Valuation]:
+    stmt = (
+        select(Valuation)
+        .where(Valuation.issuer_name == issuer_name)
+        .order_by(Valuation.valuation_date.desc(), Valuation.created_at.desc())
+    )
+    if valuation_type is not None:
+        stmt = stmt.where(Valuation.valuation_type == ValuationType(valuation_type))
+    return list(session.execute(stmt).scalars().all())
+
+
+@app.get(
+    "/valuations/{issuer_name}/latest",
+    response_model=LatestValuationOut,
+    responses={
+        401: {"model": ErrorOut},
+        404: {"model": ErrorOut},
+        400: {"model": ErrorOut},
+    },
+)
+def latest_valuation(
+    issuer_name: str,
+    valuation_type: str = Query(
+        default="fmv_409a", pattern="^(fmv_409a|preferred_price_round)$"
+    ),
+    as_of: datetime | None = None,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> LatestValuationOut:
+    """The current valuation of a given type, as of now (or an explicit
+    date). Staleness is a nag, not a block: a 409A older than 12 months
+    still floors strike prices until a new valuation is recorded."""
+    ref = as_of or datetime.now(timezone.utc)
+    row = session.execute(
+        select(Valuation)
+        .where(
+            Valuation.issuer_name == issuer_name,
+            Valuation.valuation_type == ValuationType(valuation_type),
+            Valuation.valuation_date <= ref,
+        )
+        .order_by(Valuation.valuation_date.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No {valuation_type} valuation on file for {issuer_name!r}",
+        )
+    months_old = _months_old(row.valuation_date, ref)
+    return LatestValuationOut(
+        id=row.id,
+        issuer_name=row.issuer_name,
+        valuation_date=row.valuation_date,
+        price_per_share=row.price_per_share,
+        valuation_type=row.valuation_type,
+        method=row.method,
+        notes=row.notes,
+        created_at=row.created_at,
+        is_stale=months_old > _STALE_AFTER_MONTHS,
+        months_old=round(months_old, 1),
     )
 
 

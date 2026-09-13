@@ -4,6 +4,7 @@ import {
   CapitalCall,
   CapitalCallStatus,
   Investor,
+  LatestValuation,
   LedgerEntry,
   ProposalStatus,
 } from '../types';
@@ -141,10 +142,20 @@ export function mapCapTableEvent(row: Record<string, unknown>): CapTableEvent {
     event_type: (row.event_type as CapTableEvent['event_type']) || 'issuance',
     holder_id: (row.holder_id as string) || '',
     holder_name: (row.holder_name as string) || (row.holder_id as string) || '',
+    to_holder_id: (row.to_holder_id as string) || undefined,
+    to_holder_name: (row.to_holder_name as string) || undefined,
     share_count: (row.quantity as number) ?? 0,
     share_class: (row.share_class as string) || 'Common',
     share_price: (row.price_per_share as number) ?? undefined,
     timestamp: (row.effective_date as string) || new Date().toISOString(),
+    // Vesting schedule fields (issuance only)
+    vesting_start_date: (row.vesting_start_date as string) || undefined,
+    vesting_period_months: (row.vesting_period_months as number) ?? undefined,
+    cliff_months: (row.cliff_months as number) ?? undefined,
+    acceleration_clause: (row.acceleration_clause as string) || undefined,
+    // Repurchase fields (cancellation only)
+    is_repurchase: Boolean(row.is_repurchase),
+    repurchase_approver: (row.repurchase_approver as string) || undefined,
   };
 }
 
@@ -345,16 +356,51 @@ export async function createCapTableEvent(body: {
   event_type: string;
   holder_id?: string | null;
   from_holder_id?: string | null;
+  target_security_id?: string | null;
   quantity: number;
   price_per_share?: number | null;
   effective_date: string;
   notes?: string | null;
+  // Vesting schedule fields (issuance only)
+  vesting_start_date?: string | null;
+  vesting_period_months?: number | null;
+  cliff_months?: number | null;
+  acceleration_clause?: string | null;
+  // Repurchase fields (cancellation only)
+  is_repurchase?: boolean;
+  repurchase_approver?: string | null;
 }): Promise<CapTableEvent> {
   const row = await request<Record<string, unknown>>('/cap-table-events', {
     method: 'POST',
     body: JSON.stringify(body),
   });
   return mapCapTableEvent(row);
+}
+
+// GET /valuations/{issuer}/latest -- current 409A FMV (or preferred round
+// price) plus the staleness nag. Returns null when no valuation is on file
+// or the backend is unreachable, so callers just hide the context strip.
+export async function getLatestValuation(
+  issuerName: string,
+  valuationType: 'fmv_409a' | 'preferred_price_round' = 'fmv_409a',
+): Promise<LatestValuation | null> {
+  try {
+    const row = await request<Record<string, unknown>>(
+      `/valuations/${encodeURIComponent(issuerName)}/latest?valuation_type=${valuationType}`,
+    );
+    return {
+      id: (row.id as string) || '',
+      issuer_name: (row.issuer_name as string) || issuerName,
+      valuation_date: (row.valuation_date as string) || '',
+      price_per_share: (row.price_per_share as number) ?? 0,
+      valuation_type: (row.valuation_type as string) || valuationType,
+      method: (row.method as string) || undefined,
+      is_stale: Boolean(row.is_stale),
+      months_old: (row.months_old as number) ?? 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function instrumentLedger(
@@ -380,8 +426,13 @@ export async function ensureSecurity(
   const key = `${issuerName}|${shareClass}`;
   const cached = securityIdCache.get(key);
   if (cached) return cached;
-  const securityType = shareClass.toLowerCase().includes('pref')
+  const cls = shareClass.toLowerCase();
+  const securityType = cls.includes('pref')
     ? 'preferred'
+    : cls.includes('option') || cls.includes('esop')
+    ? 'option'
+    : cls.includes('safe')
+    ? 'safe'
     : 'common';
   const id = await createSecurity({
     issuer_name: issuerName,

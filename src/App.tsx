@@ -12,6 +12,7 @@ import {
   CapTableProposal,
   CapitalCall,
   Investor,
+  LatestValuation,
   LedgerEntry,
   PipelineRunResult,
 } from './types';
@@ -32,6 +33,8 @@ export default function App() {
   // State Stores
   const [lastPipelineResult, setLastPipelineResult] = useState<PipelineRunResult | null>(null);
   const [capTableEvents, setCapTableEvents] = useState<CapTableEvent[]>(INITIAL_CAP_TABLE_EVENTS);
+  // 409A context for the cap table (live API only; null in demo mode).
+  const [latest409a, setLatest409a] = useState<LatestValuation | null>(null);
   const [proposals, setProposals] = useState<CapTableProposal[]>([
     {
       id: 'prop_seed_1',
@@ -53,14 +56,17 @@ export default function App() {
   // seeds stay and the app keeps running in demo mode.
   const refreshFromServer = useCallback(async () => {
     try {
-      const [serverInvestors, serverCalls, serverProposals] = await Promise.all([
+      const [serverInvestors, serverCalls, serverProposals, latestValuation] = await Promise.all([
         liveApi.listInvestors(),
         liveApi.listCapitalCalls(),
         liveApi.listProposals(),
+        // Never rejects -- null when no valuation is on file / offline.
+        liveApi.getLatestValuation('Flowgate Systems Inc.'),
       ]);
       setInvestors(serverInvestors);
       setCapitalCalls(serverCalls);
       setProposals(serverProposals);
+      setLatest409a(latestValuation);
     } catch {
       // Backend unreachable (or sleeping Render instance) -- demo mode.
     }
@@ -142,22 +148,73 @@ export default function App() {
 
     if (liveApi.isLive()) {
       try {
-        const [securityId, holderId] = await Promise.all([
+        const [securityId] = await Promise.all([
           liveApi.ensureSecurity(eventData.issuer_name, eventData.share_class),
-          liveApi.ensureHolder(eventData.holder_name),
         ]);
+        // Backend semantics: TRANSFER needs from_holder_id (source) and
+        // holder_id (recipient); CANCELLATION needs from_holder_id; issuance
+        // / exercise / conversion use holder_id. The frontend event model is
+        // issuer/holder-centric where holder_id is the transferor for
+        // transfers, so translate before hitting the API.
+        const recipientId =
+          eventData.event_type === 'transfer' && eventData.to_holder_name
+            ? await liveApi.ensureHolder(eventData.to_holder_name)
+            : undefined;
+        const holderId =
+          eventData.event_type === 'transfer'
+            ? recipientId
+            : eventData.event_type === 'cancellation'
+            ? undefined
+            : eventData.holder_name
+            ? await liveApi.ensureHolder(eventData.holder_name)
+            : undefined;
+        const fromHolderId =
+          eventData.event_type === 'transfer' || eventData.event_type === 'cancellation'
+            ? await liveApi.ensureHolder(eventData.holder_name)
+            : undefined;
         const evt = await liveApi.createCapTableEvent({
           security_id: securityId,
           event_type: eventData.event_type,
           holder_id: holderId,
+          from_holder_id: fromHolderId,
           quantity: eventData.share_count,
           price_per_share: eventData.share_price ?? null,
           effective_date: new Date().toISOString(),
+          // Vesting schedule fields (issuance only)
+          vesting_start_date: eventData.vesting_start_date || null,
+          vesting_period_months: eventData.vesting_period_months ?? null,
+          cliff_months: eventData.cliff_months ?? null,
+          acceleration_clause: eventData.acceleration_clause || null,
+          // Repurchase fields (cancellation only)
+          is_repurchase: Boolean(eventData.is_repurchase),
+          repurchase_approver:
+            eventData.is_repurchase && eventData.repurchase_approver
+              ? eventData.repurchase_approver
+              : null,
         });
         newEvent = {
           ...evt,
           issuer_name: eventData.issuer_name,
           holder_name: eventData.holder_name,
+          to_holder_name: eventData.to_holder_name,
+          // Keep the frontend event model (holder_id = transferor for
+          // transfers) consistent with the demo engine, even though the
+          // backend returns the recipient as holder_id for transfers.
+          holder_id: eventData.holder_id || evt.holder_id,
+          to_holder_id: eventData.to_holder_id,
+          share_count: eventData.share_count,
+          share_class: eventData.share_class,
+          share_price: eventData.share_price ?? evt.share_price,
+          vesting_start_date:
+            eventData.vesting_start_date || evt.vesting_start_date,
+          vesting_period_months:
+            eventData.vesting_period_months ?? evt.vesting_period_months,
+          cliff_months: eventData.cliff_months ?? evt.cliff_months,
+          acceleration_clause:
+            eventData.acceleration_clause || evt.acceleration_clause,
+          is_repurchase: Boolean(eventData.is_repurchase),
+          repurchase_approver:
+            eventData.repurchase_approver || evt.repurchase_approver,
         };
       } catch {
         // Backend unreachable -- demo fallback below.
@@ -536,6 +593,7 @@ export default function App() {
                 events={capTableEvents}
                 proposals={proposals}
                 investors={investors}
+                latest409a={latest409a}
                 onRecordEvent={handleRecordEvent}
                 onApproveProposal={handleApproveProposal}
                 onRejectProposal={handleRejectProposal}

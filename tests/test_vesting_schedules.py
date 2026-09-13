@@ -529,3 +529,85 @@ def test_api_vesting_endpoints_and_guards(client: TestClient):
     assert len(cap_json["grants"]) == 1
     assert cap_json["grants"][0]["vested_shares"] == 12_000
     assert cap_json["grants"][0]["acceleration_clause"] == "double_trigger"
+
+
+# --------------------------------------------------------------------------- #
+# Test 11: Live-first frontend payload contract (the wiring this phase fixed)
+# --------------------------------------------------------------------------- #
+
+
+def test_react_live_first_vesting_payload_contract(client: TestClient):
+    # Mirrors src/App.tsx handleRecordEvent -> createCapTableEvent exactly:
+    # every vesting/repurchase field is forwarded (null when absent) and
+    # transfers map transferor -> from_holder_id, recipient -> holder_id.
+    sec = client.post(
+        "/securities", json={
+            "issuer_name": "React Corpa", "name": "ESOP", "security_type": "option", "authorized_shares": 100_000,
+        },
+    )
+    assert sec.status_code == 201
+    sec_id = sec.json()["id"]
+
+    inv = client.post("/investors", json={"name": "Dev One", "investor_type": "individual"})
+    assert inv.status_code == 201
+    inv_id = inv.json()["id"]
+
+    # 1. Issuance WITH vesting schedule (the fields CapTableView.tsx collects).
+    grant = client.post(
+        "/cap-table-events",
+        json={
+            "security_id": sec_id,
+            "event_type": "issuance",
+            "holder_id": inv_id,
+            "quantity": 48_000,
+            "price_per_share": 1.0,
+            "effective_date": "2024-01-01T00:00:00Z",
+            "vesting_start_date": "2024-01-01",
+            "vesting_period_months": 48,
+            "cliff_months": 12,
+            "acceleration_clause": "single_trigger",
+            "is_repurchase": False,
+            "repurchase_approver": None,
+        },
+    )
+    assert grant.status_code == 201, grant.text
+    body = grant.json()
+    assert body["vesting_start_date"] == "2024-01-01"
+    assert body["vesting_period_months"] == 48
+    assert body["cliff_months"] == 12
+    assert body["acceleration_clause"] == "single_trigger"
+
+    # 2. Cap table grants panel data comes back (the UI hydrates from it).
+    cap = client.get("/cap-table/React%20Corpa?as_of=2025-01-01")
+    assert cap.status_code == 200
+    cap_json = cap.json()
+    assert cap_json["total_vested_shares"] == 12_000
+    assert len(cap_json["grants"]) == 1
+    assert cap_json["grants"][0]["acceleration_clause"] == "single_trigger"
+    grant_id = cap_json["grants"][0]["event_id"]
+    assert grant_id
+    # 3. A transfer now carries transferor -> from_holder_id (was broken live).
+    buyer = client.post("/investors", json={"name": "Buyer Two", "investor_type": "institution"})
+    buyer_id = buyer.json()["id"]
+    out = client.post("/cap-table-events",
+        json={
+            "security_id": sec_id,
+            "event_type": "transfer",
+            "from_holder_id": inv_id,
+            "holder_id": buyer_id,
+            "quantity": 6_000,
+            "effective_date": "2025-01-01T00:00:00Z",
+            "vesting_start_date": None,
+            "vesting_period_months": None,
+            "cliff_months": None,
+            "acceleration_clause": None,
+            "is_repurchase": False,
+            "repurchase_approver": None,
+        },
+    )
+    assert out.status_code == 201, out.text
+    # Transferee now holds the vested shares that moved.
+    after = client.get("/cap-table/React%20Corpa").json()
+    buyer_pos = next((p for p in after["positions"] if p["holder_id"] == buyer_id), None)
+    assert buyer_pos is not None and buyer_pos["shares"] == 6_000
+

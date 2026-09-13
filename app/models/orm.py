@@ -57,6 +57,7 @@ from app.models.enums import (
     TransferEvaluationOutcome,
     TransferGate,
     TransferRuleType,
+    ValuationType,
     SYSTEM_SETTABLE,
     HUMAN_ONLY,
 )
@@ -711,4 +712,43 @@ class TransferEvaluation(Base):
         return (
             f"<TransferEvaluation security={self.security_id!r} "
             f"outcome={self.outcome.value} qty={self.quantity}>"
+        )
+
+
+class Valuation(Base):
+    """A recorded valuation of an issuer's common stock -- Section 409A FMV
+    from a qualified appraisal, or the preferred share price from a priced
+    round. Pure record-keeping: no computation lives here.
+
+    Usage (CAPTABLE-ROADMAP-FEATURES.md Feature 2): the latest 409A FMV in
+    effect on a grant date floors option strike prices (enforced by the
+    cap-table event gate), anchors the waterfall baseline common price, and
+    is surfaced on the cap table as context."""
+
+    __tablename__ = "valuations"
+    __table_args__ = (
+        Index("ix_valuations_issuer_date", "issuer_name", "valuation_date"),
+        Index("ix_valuations_type", "valuation_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issuer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    valuation_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    price_per_share: Mapped[float] = mapped_column(Float, nullable=False)
+    valuation_type: Mapped[ValuationType] = mapped_column(
+        Enum(ValuationType, native_enum=False, length=32), nullable=False
+    )
+    # How the number was derived, e.g. "OPM backsolve", "independent
+    # appraisal", "Series A price" -- audit context, never a computation.
+    method: Mapped[str | None] = mapped_column(String(255), default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<Valuation issuer={self.issuer_name!r} "
+            f"type={self.valuation_type.value} "
+            f"price={self.price_per_share} date={self.valuation_date}>"
         )

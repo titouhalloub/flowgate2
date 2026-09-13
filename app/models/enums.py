@@ -219,3 +219,13 @@ class TransferEvaluationOutcome(str, Enum):
     BLOCKED = "blocked"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+class ValuationType(str, Enum):
+    """Vocabulary of recorded issuer valuations. A 409A FMV is the fair
+    market value of the common stock from a qualified appraisal (Section
+    409A compliance: it floors option strike prices); a preferred price
+    round records the price of the most recent priced equity round."""
+
+    FMV_409A = "fmv_409a"
+    PREFERRED_PRICE_ROUND = "preferred_price_round"
