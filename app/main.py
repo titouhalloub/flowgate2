@@ -8,6 +8,7 @@ handling -- not business logic.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -134,6 +135,11 @@ app.add_middleware(
 _dist_dir = Path(__file__).resolve().parent.parent / "dist"
 _static_dir = _dist_dir if (_dist_dir / "index.html").is_file() else Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+# Temporary 409A gate diagnostics (remove once the below-FMV gate is verified
+# end-to-end on the live deployment).
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("flowgate.409a")
 
 
 @app.get("/")
@@ -658,6 +664,14 @@ def record_cap_table_event(
         and payload.price_per_share is not None
         and security.security_type in (SecurityType.OPTION, SecurityType.WARRANT)
     ):
+        logger.info(
+            "409A gate ACTIVE: issuer=%r security_type=%s price_per_share=%r "
+            "effective_date=%r",
+            security.issuer_name,
+            security.security_type,
+            payload.price_per_share,
+            payload.effective_date,
+        )
         fmv = session.execute(
             select(Valuation)
             .where(
@@ -668,6 +682,11 @@ def record_cap_table_event(
             .order_by(Valuation.valuation_date.desc())
             .limit(1)
         ).scalar_one_or_none()
+        logger.info(
+            "409A gate FMV lookup: issuer=%r -> %s",
+            security.issuer_name,
+            f"FMV {fmv.price_per_share} @ {fmv.valuation_date}" if fmv else "None (no valuation on file)",
+        )
         if fmv is not None and payload.price_per_share < fmv.price_per_share:
             raise HTTPException(
                 status_code=400,
@@ -678,6 +697,14 @@ def record_cap_table_event(
                     "below-FMV grant violates Section 409A"
                 ),
             )
+    elif payload.event_type == CapTableEventType.ISSUANCE.value:
+        # Diagnostic: the gate did NOT activate -- log why.
+        logger.info(
+            "409A gate SKIPPED: security_type=%s price_per_share=%r "
+            "(gate requires option/warrant + a non-null price)",
+            security.security_type,
+            payload.price_per_share,
+        )
 
     # Phase D governance gate: every proposed TRANSFER is evaluated against
     # the issuer's active rules BEFORE it reaches the append-only log. The
