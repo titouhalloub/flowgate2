@@ -111,6 +111,149 @@ class CapTableSnapshot:
         }
 
 
+# --------------------------------------------------------------------------- #
+# SAFE / Convertible Conversion Arithmetic
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class ConversionResult:
+    """Result of converting a single convertible (SAFE) into a priced round."""
+    convertible_id: str
+    investor_name: str
+    purchase_amount: float
+    pricing_basis: str           # "cap" | "discount"
+    conversion_price: float
+    shares_issued: float
+    cap_price: float | None
+    discount_price: float | None
+
+
+class ConversionError(ValueError):
+    """Raised when conversion parameters are invalid or impossible."""
+
+
+def compute_conversions(
+    convertibles: list,
+    round_price: float,
+    pre_safe_shares: int,
+    options_pool: int,
+) -> list[ConversionResult]:
+    """
+    Compute conversion shares for a batch of post-money SAFEs against
+    a priced round. Uses the YC post-money SAFE formula:
+
+        owner_i = purchase_amount_i / valuation_cap_i
+        sum_owner = Σ owner_j
+        shares_i  = owner_i / (1 − sum_owner) × (pre_safe_shares + options_pool)
+
+    For each convertible, compare the cap-derived price (purchase / shares)
+    against the discount price (round_price × (1 − discount_rate)) and
+    take the lower (which yields more shares for the investor).
+
+    Args:
+        convertibles: List of Convertible ORM objects (or dicts with the
+            same fields). Only those with instrument_kind == "post_money_safe"
+            are processed; pre-money SAFEs raise ConversionError.
+        round_price: Price per share of the priced round (must be > 0).
+        pre_safe_shares: Total shares outstanding before any SAFE conversion.
+        options_pool: Unallocated option pool shares.
+
+    Returns:
+        List of ConversionResult, one per convertible.
+
+    Raises:
+        ConversionError: If round_price <= 0, any SAFE is pre-money,
+            sum_owner >= 1.0, or any valuation_cap <= 0.
+    """
+    if round_price <= 0:
+        raise ConversionError("round_price must be positive")
+
+    # Validate and filter to post-money SAFEs
+    post_money = []
+    for c in convertibles:
+        kind = getattr(c, "instrument_kind",
+                       c.get("instrument_kind") if isinstance(c, dict) else None)
+        if kind != "post_money_safe":
+            cid = getattr(c, "id",
+                          c.get("id") if isinstance(c, dict) else "unknown")
+            raise ConversionError(
+                f"Pre-money SAFE conversion is not yet supported. "
+                f"Convertible {cid} has instrument_kind={kind!r}. "
+                f"Use manual override."
+            )
+        cap = getattr(c, "valuation_cap",
+                      c.get("valuation_cap") if isinstance(c, dict) else None)
+        if cap is None or cap <= 0:
+            cid = getattr(c, "id",
+                          c.get("id") if isinstance(c, dict) else "unknown")
+            raise ConversionError(
+                f"Convertible {cid} has invalid valuation_cap={cap!r}"
+            )
+        post_money.append(c)
+
+    # Compute owner_i = purchase_amount_i / valuation_cap_i
+    owners = []
+    for c in post_money:
+        amount = getattr(c, "purchase_amount",
+                         c.get("purchase_amount") if isinstance(c, dict) else None)
+        cap = getattr(c, "valuation_cap",
+                      c.get("valuation_cap") if isinstance(c, dict) else None)
+        owners.append(amount / cap)
+
+    sum_owner = sum(owners)
+    if sum_owner >= 1.0:
+        raise ConversionError(
+            f"Total SAFE ownership fraction {sum_owner:.6f} >= 1.0 -- "
+            "SAFEs would own 100%+ of the company (data error)"
+        )
+
+    denominator = 1.0 - sum_owner
+    common_base = pre_safe_shares + options_pool
+
+    results = []
+    for c, owner in zip(post_money, owners):
+        amount = getattr(c, "purchase_amount",
+                         c.get("purchase_amount") if isinstance(c, dict) else None)
+        disc = getattr(c, "discount_rate",
+                       c.get("discount_rate") if isinstance(c, dict) else None)
+
+        # Cap-derived shares and price
+        cap_shares = (owner / denominator) * common_base
+        cap_price = amount / cap_shares if cap_shares > 0 else float("inf")
+
+        # Discount price
+        if disc is not None and disc > 0:
+            discount_price = round_price * (1.0 - disc)
+        else:
+            discount_price = float("inf")
+
+        # Choose the lower price (more shares for investor)
+        if cap_price <= discount_price:
+            basis = "cap"
+            conversion_price = cap_price
+            shares = cap_shares
+        else:
+            basis = "discount"
+            conversion_price = discount_price
+            shares = amount / discount_price
+
+        results.append(ConversionResult(
+            convertible_id=getattr(c, "id",
+                                   c.get("id", "") if isinstance(c, dict) else ""),
+            investor_name=getattr(c, "investor_name",
+                                 c.get("investor_name", "") if isinstance(c, dict) else ""),
+            purchase_amount=amount,
+            pricing_basis=basis,
+            conversion_price=conversion_price,
+            shares_issued=shares,
+            cap_price=cap_price,
+            discount_price=discount_price,
+        ))
+
+    return results
+
+
 class CapTableError(ValueError):
     """Raised when the event log itself is inconsistent -- e.g. a transfer
     or cancellation that would take a holder's position negative, or an
