@@ -18,6 +18,7 @@ from app.schemas import (
     CapitalCallExtraction,
     SubscriptionAgreementExtraction,
     EquitySubscriptionExtraction,
+    SafeExtraction,
     extract_result_to_document_data,
 )
 from app.models.enums import DocumentType
@@ -659,6 +660,129 @@ def extract_equity_subscription(text: str) -> tuple[EquitySubscriptionExtraction
         subscriber_name=subscriber,
         source_text=text[:2000],
     ), conf
+def extract_safe(text: str) -> tuple[SafeExtraction | None, float]:
+    """Y Combinator SAFE (Simple Agreement for Future Equity) purchase
+    agreement.
+
+    Looks for: the company ("the Company"), the investor (signature-block
+    style, same rule as the equity subscription), the purchase amount
+    ('purchase amount of $100,000'), the valuation cap ('Post-Money
+    Valuation Cap: $8,000,000'), the discount rate ('Discount Rate: 15%'
+    or 'a 15% discount', stored as the fraction 0.15), the pro-rata and
+    MFN clauses (explicit marks only), which SAFE flavor the document
+    claims (post- vs pre-money), and the conversion trigger.
+    """
+    company_name = _extract_company_name(text)
+    investor_name = _extract_subscriber_name(text)
+    if investor_name is None:
+        # SAFE convention (explicit document naming only, same strictness
+        # spirit as the subscription rule): a "(the "Investor")" preamble
+        # or a "The Investor: X" colon label. Never a signature-block guess.
+        for pat in (
+            r'([A-Z][A-Za-z0-9 .,&"\'-]{2,90}?)\s*'
+            r'\(\s*the\s*["\u201c\u201d\']?(?:Investor|Purchaser)["\u201c\u201d\']?\s*\)',
+            r'(?:The\s+)?Investor\s*:\s*([A-Z][A-Za-z0-9 .,&\-]{2,90})',
+        ):
+            investor_name = _clean_name(_grep(pat, text))
+            if investor_name:
+                break
+
+    purchase, cur = _money_after(
+        text,
+        r"(?:purchase\s+amount|purchase\s+price|amount\s+invested)",
+        window=80)
+    if purchase is None:
+        purchase, cur = _money_after(text, r"\bpurchas", window=80)
+    valuation_cap, cap_cur = _money_after(
+        text, r"(?:post[- ]?money\s+)?valuation\s+cap", window=80)
+
+    # Discount rate: 'Discount Rate: 15%', 'a 15% discount', or the
+    # equivalent 'converts at an 85% price' form -> 1 - 0.85.
+    discount_rate: float | None = None
+    m = re.search(
+        r"discount\s*(?:rate)?\s*[:\s]*(?:of\s*)?(\d+(?:\.\d+)?)\s*%", text, re.I)
+    if not m:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*%\s+discount", text, re.I)
+    if m:
+        rate = float(m.group(1))
+        if rate > 1.0:
+            rate /= 100.0
+        if 0.0 < rate < 1.0:
+            discount_rate = rate
+        # A bare '85% conversion price' phrasing is handled below.
+    if discount_rate is None:
+        m = re.search(
+            r"(\d+(?:\.\d+)?)\s*%\s+(?:conversion\s+)?price", text, re.I)
+        if m:
+            rate = float(m.group(1))
+            if 1.0 < rate < 100.0:
+                discount_rate = 1.0 - rate / 100.0
+
+    # Explicit marks only -- silence stays None (never guessed).
+    pro_rata: bool | None = None
+    if re.search(r"\bno\s+pro[- ]?rata\b|\bwaives?\s+[^.\n]*pro[- ]?rata",
+                 text, re.I):
+        pro_rata = False
+    elif re.search(r"pro[- ]?rata", text, re.I):
+        pro_rata = True
+    mfn: bool | None = None
+    if re.search(r"\bno\s+(?:\w+\s+)*?\bMFN\b|"
+                 r"most[- ]favored[- ]nation", text, re.I):
+        mfn = not bool(re.search(r"\bno\s+(?:\w+\s+)*?\bMFN\b", text, re.I))
+    elif re.search(r"\bMFN\b", text):
+        mfn = True
+
+    instrument_kind: str | None = None
+    if re.search(r"post[- ]?money\s+(?:valuation\s+cap|safe)", text, re.I):
+        instrument_kind = "post_money_safe"
+    elif re.search(r"pre[- ]?money\s+(?:valuation\s+cap|safe)", text, re.I):
+        instrument_kind = "pre_money_safe"
+
+    conversion_trigger = _clean_name(_grep(
+        r"(?:upon|on|in\s+the\s+event\s+of)\s+(?:the\s+|a\s+)?"
+        r"((?:equity\s+financing|liquidity\s+event|change\s+of\s+control|"
+        r"dissolution)[^.]{0,40})",
+        text))
+
+    currency = (cur or cap_cur or _currency_of(text) or "USD").upper()[:3]
+    currency_found = bool(cur or cap_cur or _currency_of(text)
+                          or _DOLLAR_AMOUNT.search(text))
+    doc_date = _parse_doc_date(text)
+
+    if not any((company_name, investor_name, purchase, valuation_cap,
+                discount_rate, pro_rata, mfn, conversion_trigger)):
+        return None, 0.0
+
+    # Same shape as extract_equity_subscription: who/what/how-much anchors
+    # (company, purchase amount, cap, currency evidence) carry 1.0 each;
+    # deal-shaping fields (investor, flavor, discount) 0.6; clause details
+    # (pro-rata, MFN, trigger, date) only ever ADD signal -- their absence
+    # is an honest None, never a penalty.
+    num = (sum(1.0 for f in (company_name, purchase, valuation_cap,
+                             currency_found) if f)
+           + 0.6 * sum(1 for f in (investor_name, instrument_kind,
+                                   discount_rate) if f)
+           + 0.3 * sum(1 for f in (pro_rata, mfn, conversion_trigger,
+                                   doc_date) if f))
+    den = 4.0 + 0.6 * 3 + 0.3 * 4
+    conf = min(1.0, num / den)
+
+    return SafeExtraction(
+        company_name=company_name,
+        investor_name=investor_name,
+        purchase_amount=purchase,
+        currency=currency,
+        valuation_cap=valuation_cap,
+        discount_rate=discount_rate,
+        pro_rata_rights=pro_rata,
+        mfn_clause=mfn,
+        instrument_kind=instrument_kind,
+        conversion_trigger=conversion_trigger,
+        document_date=doc_date,
+        source_text=text[:2000],
+    ), conf
+
+
 def extract_subscription(text: str) -> tuple[SubscriptionAgreementExtraction | None, float]:
     """Extract subscription agreement information.
 
@@ -757,6 +881,7 @@ EXTRACTORS: dict[str, Callable[[str], tuple[BaseModel | None, float]]] = {
     "capital_call_notice": extract_capital_call,
     "subscription_agreement": extract_subscription,
     "equity_subscription": extract_equity_subscription,
+    "safe": extract_safe,
 }
 
 EXTRACTION_ROUTE_NAMES: dict[DocumentType, str] = {
@@ -765,6 +890,7 @@ EXTRACTION_ROUTE_NAMES: dict[DocumentType, str] = {
     DocumentType.CAPITAL_CALL_NOTICE: "CapitalCallExtraction",
     DocumentType.SUBSCRIPTION_AGREEMENT: "SubscriptionAgreementExtraction",
     DocumentType.EQUITY_SUBSCRIPTION: "EquitySubscriptionExtraction",
+    DocumentType.SAFE: "SafeExtraction",
 }
 
 

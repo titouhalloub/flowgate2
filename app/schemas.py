@@ -177,6 +177,43 @@ class EquitySubscriptionExtraction(BaseModel):
     source_text: str | None = None
 
 
+class SafeExtraction(BaseModel):
+    """Y Combinator SAFE (Simple Agreement for Future Equity) purchase
+    agreement.
+
+    Post-money SAFEs state a 'Post-Money Valuation Cap' (the cap INCLUDES
+    the SAFE's own conversion); pre-money SAFEs a plain 'Valuation Cap'.
+    ``instrument_kind`` records which flavor the document claims -- never
+    inferred from the cap wording alone when both phrases are absent.
+    ``discount_rate`` is stored as the fractional discount (a 'Discount
+    Rate: 15%' clause -> 0.15), so conversion pricing is
+    round_price * (1 - discount_rate) with no re-derivation at read time.
+    """
+
+    schema_name: Literal["SafeExtraction"] = "SafeExtraction"
+    schema_version: Literal["v1"] = "v1"
+    extracted_at: datetime = Field(default_factory=datetime.utcnow)
+    company_name: str | None = None
+    # The SAFE purchaser (buyer), as opposed to company_name (the issuer).
+    investor_name: str | None = None
+    purchase_amount: float | None = None
+    currency: str | None = None
+    valuation_cap: float | None = None
+    # Fractional discount, e.g. 15% -> 0.15. None when unstated.
+    discount_rate: float | None = None
+    # Explicit marks only: a "Pro-Rata Rights" clause -> True, an express
+    # "no pro-rata" waiver -> False, silence -> None.
+    pro_rata_rights: bool | None = None
+    mfn_clause: bool | None = None
+    # "post_money_safe" | "pre_money_safe" | None (unstated).
+    instrument_kind: str | None = None
+    # Which priced event converts the SAFE, as the document names it
+    # ("equity financing", "liquidity event", "change of control").
+    conversion_trigger: str | None = None
+    document_date: date | None = None
+    source_text: str | None = None
+
+
 def extract_result_to_document_data(
     extraction: BaseModel, schema_name: str
 ) -> dict[str, Any]:

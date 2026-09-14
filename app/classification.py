@@ -214,6 +214,31 @@ EQUITY_SUBSCRIPTION_KEYWORDS: set[str] = {
     "authorized for sale",
     "transfer agent",
 }
+
+# Y Combinator SAFE (Simple Agreement for Future Equity) vocabulary.
+# Kept disjoint from the other lexicons per the overlap policy above:
+# a keyword shared with another class is ambiguous evidence and counts
+# for neither, so duplicating one here would only silence it. "safe" on
+# its own is deliberately absent — it substring-matches "safeguard" and
+# "safekeeping"; the distinctive multi-word phrases carry the signal.
+SAFE_KEYWORDS: set[str] = {
+    "simple agreement for future equity",
+    "safe agreement",
+    "valuation cap",
+    "discount rate",
+    "pro-rata rights",
+    "pro rata rights",
+    "most favored nation",
+    "mfn",
+    "post-money safe",
+    "pre-money safe",
+    "post-money",
+    "pre-money",
+    "conversion trigger",
+    "equity financing",
+    "liquidity event",
+    "amended and restated safe",
+}
 # Document types that classification can *never* produce — these are only
 # ever assigned by the ingestion layer or human triage.
 NON_CLASSIFIABLE: set[DocumentType] = {
@@ -280,6 +305,7 @@ _LEXICONS_FOR_OVERLAP: dict[str, set[str]] = {
     "capcall": CAPITAL_CALL_KEYWORDS,
     "subscription": SUBSCRIPTION_KEYWORDS,
     "equity": EQUITY_SUBSCRIPTION_KEYWORDS,
+    "safe": SAFE_KEYWORDS,
 }
 _AMBIGUOUS_KEYWORDS: set[str] = set()
 _seen_once: set[str] = set()
@@ -356,6 +382,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
     cc_hits = _keyword_score(t, CAPITAL_CALL_KEYWORDS)
     sub_hits = _keyword_score(t, SUBSCRIPTION_KEYWORDS)
     equity_hits = _keyword_score(t, EQUITY_SUBSCRIPTION_KEYWORDS)
+    safe_hits = _keyword_score(t, SAFE_KEYWORDS)
 
     # Overlap policy: keywords present in more than one lexicon are
     # ambiguous evidence and count for neither class (see the overlap
@@ -370,6 +397,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
         cc_hits = _keyword_score(t, _EXCLUSIVE_LEXICONS["capcall"])
         sub_hits = _keyword_score(t, _EXCLUSIVE_LEXICONS["subscription"])
         equity_hits = _keyword_score(t, _EXCLUSIVE_LEXICONS["equity"])
+        safe_hits = _keyword_score(t, _EXCLUSIVE_LEXICONS["safe"])
 
     # Filename keyword matches — these are deliberate uploader signals
     # ("Subscription-Agreement-...pdf") that should break ties in the
@@ -387,6 +415,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
     fname_cc = _keyword_score(expanded, CAPITAL_CALL_KEYWORDS)
     fname_sub = _keyword_score(expanded, SUBSCRIPTION_KEYWORDS)
     fname_equity = _keyword_score(expanded, EQUITY_SUBSCRIPTION_KEYWORDS)
+    fname_safe = _keyword_score(expanded, SAFE_KEYWORDS)
 
     # Filename keyword matches boost ALL matching classes equally, then
     # we pick the winner.  The filename is a deliberate uploader signal
@@ -397,6 +426,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
     cc_hits += 2 * fname_cc
     sub_hits += 2 * fname_sub
     equity_hits += 2 * fname_equity
+    safe_hits += 2 * fname_safe
 
     # Build a list of (hits, doc_type) sorted descending by hits
     candidates = [
@@ -405,6 +435,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
         (cc_hits, DocumentType.CAPITAL_CALL_NOTICE),
         (sub_hits, DocumentType.SUBSCRIPTION_AGREEMENT),
         (equity_hits, DocumentType.EQUITY_SUBSCRIPTION),
+        (safe_hits, DocumentType.SAFE),
     ]
     candidates.sort(key=lambda x: x[0], reverse=True)
 
@@ -422,6 +453,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
             DocumentType.CAPITAL_CALL_NOTICE: fname.find("capital") if fname_cc else 999,
             DocumentType.SUBSCRIPTION_AGREEMENT: fname.find("subscription") if fname_sub else 999,
             DocumentType.EQUITY_SUBSCRIPTION: fname.find("subscription") if fname_equity else 999,
+            DocumentType.SAFE: fname.find("safe") if fname_safe else 999,
         }
         # Filter to classes that are tied at best_hits
         hits_map = {
@@ -430,6 +462,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
             DocumentType.CAPITAL_CALL_NOTICE: cc_hits,
             DocumentType.SUBSCRIPTION_AGREEMENT: sub_hits,
             DocumentType.EQUITY_SUBSCRIPTION: equity_hits,
+            DocumentType.SAFE: safe_hits,
         }
         tied = [c for c in hits_map if hits_map[c] == best_hits]
         # Pick the tied class with the earliest filename keyword position
@@ -464,6 +497,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
         DocumentType.CAPITAL_CALL_NOTICE: fname_cc,
         DocumentType.SUBSCRIPTION_AGREEMENT: fname_sub,
         DocumentType.EQUITY_SUBSCRIPTION: fname_sub,
+        DocumentType.SAFE: fname_safe,
     }[best_type]
 
     if fname_bonus > 0:
@@ -529,6 +563,10 @@ def _classify_with_openai_compatible(
         "operating COMPANY (US LLC/corp): company name, state of incorporation, "
         "price per unit, total/target offering amount, minimum investment, "
         "membership interests, non-voting common units, Regulation Crowdfunding, Form C.\n"
+        "- safe: a Simple Agreement for Future Equity (Y Combinator instrument): "
+        "purchase amount, valuation cap, discount rate, MFN, pro-rata rights, "
+        "conversion on an equity financing or liquidity event. NOT a fund "
+        "subscription and NOT an equity purchase -- no shares exist yet.\n"
         'If you are not confident (below 0.75) return '
         '{"document_type": "unclassified", "confidence": <0.0-1.0>}.\n'
         'Return ONLY the JSON, no explanation.'
