@@ -9,18 +9,20 @@ handling -- not business logic.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Security, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api_schemas import (
@@ -54,6 +56,9 @@ from app.api_schemas import (
     PipelineRunOut,
     PipelineUploadOut,
     PortfolioHoldingOut,
+    PricedRoundConversionOut,
+    PricedRoundCreate,
+    PricedRoundOut,
     PricedRoundPreviewRequest,
     PricedRoundPreviewOut,
     SecurityCreate,
@@ -1159,6 +1164,316 @@ def preview_priced_round(
         total_new_shares=sum(c.shares_issued for c in conversions_out),
         conversions=conversions_out,
     )
+
+
+def _ensure_investor(session: Session, name: str) -> Investor:
+    row = session.execute(
+        select(Investor).where(Investor.name == name)
+    ).scalar_one_or_none()
+    if row is None:
+        row = Investor(
+            id=str(uuid4()), name=name, investor_type=InvestorType.INSTITUTION
+        )
+        session.add(row)
+        session.flush()
+    return row
+
+
+def _ensure_security(
+    session: Session,
+    issuer_name: str,
+    name: str,
+    security_type: SecurityType,
+    authorized_shares: float,
+) -> SecurityModel:
+    row = session.execute(
+        select(SecurityModel).where(
+            SecurityModel.issuer_name == issuer_name,
+            SecurityModel.name == name,
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = SecurityModel(
+            id=str(uuid4()),
+            issuer_name=issuer_name,
+            name=name,
+            security_type=security_type,
+            authorized_shares=authorized_shares,
+        )
+        session.add(row)
+        session.flush()
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Priced-round commit (Phase 3.5): atomically records the round's preferred
+# issuance plus one CONVERSION event per outstanding post-money SAFE, flips
+# each convertible to CONVERTED, and writes one ledger entry per event --
+# all in a single transaction. Idempotent via client_request_id (R7).
+# ---------------------------------------------------------------------------
+
+
+def _priced_round_out(round_row: PricedRound, session: Session) -> PricedRoundOut:
+    """Read model: the round plus the conversion summary rebuilt from its
+    related cap-table events (provenance via related_round_id)."""
+    events = list(
+        session.execute(
+            select(CapTableEvent).where(CapTableEvent.related_round_id == round_row.id)
+        ).scalars().all()
+    )
+    issuance = next(
+        (e for e in events if e.event_type == CapTableEventType.ISSUANCE), None
+    )
+    conv_events = [e for e in events if e.event_type == CapTableEventType.CONVERSION]
+    convertibles = {
+        c.conversion_event_id: c
+        for c in session.execute(
+            select(Convertible).where(
+                Convertible.conversion_event_id.in_([e.id for e in conv_events])
+            )
+        ).scalars().all()
+    } if conv_events else {}
+
+    conversions = []
+    for e in conv_events:
+        basis = re.search(r"basis=([a-z]+)", e.notes or "")
+        c = convertibles.get(e.id)
+        conversions.append(
+            PricedRoundConversionOut(
+                convertible_id=c.id if c else "",
+                investor_name=c.investor_name if c else "unknown",
+                event_id=e.id,
+                pricing_basis=basis.group(1) if basis else "cap",
+                conversion_price=e.price_per_share or 0.0,
+                shares_issued=e.quantity,
+            )
+        )
+    return PricedRoundOut(
+        id=round_row.id,
+        issuer_name=round_row.issuer_name,
+        round_name=round_row.round_name,
+        price_per_share=round_row.price_per_share,
+        round_shares=round_row.round_shares,
+        post_money_shares=round_row.post_money_shares,
+        effective_date=round_row.effective_date,
+        reviewer=round_row.reviewer,
+        notes=round_row.notes,
+        client_request_id=round_row.client_request_id,
+        created_at=round_row.created_at,
+        issuance_event_id=issuance.id if issuance else "",
+        total_conversion_shares=sum(c.shares_issued for c in conversions),
+        conversions=conversions,
+    )
+
+
+@app.post(
+    "/priced-rounds",
+    response_model=PricedRoundOut,
+    status_code=201,
+    responses={400: {"model": ErrorOut}, 401: {"model": ErrorOut}},
+)
+def commit_priced_round(
+    payload: PricedRoundCreate,
+    response: Response,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> PricedRoundOut:
+    # 1. Idempotency: a retried commit returns the original round untouched.
+    if payload.client_request_id:
+        existing = session.execute(
+            select(PricedRound).where(
+                PricedRound.client_request_id == payload.client_request_id
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            response.status_code = 200
+            return _priced_round_out(existing, session)
+
+    # 2. Every OUTSTANDING post-money SAFE for this issuer converts together
+    # (R1: no subset conversions; R3: converted/cancelled SAFEs untouched).
+    convertibles = list(
+        session.execute(
+            select(Convertible)
+            .where(
+                Convertible.issuer_name == payload.issuer_name,
+                Convertible.status == ConvertibleStatus.OUTSTANDING,
+            )
+            .order_by(Convertible.issued_date)
+        ).scalars().all()
+    )
+    non_usd = [c.id for c in convertibles if (c.currency or "USD").upper() != "USD"]
+    if non_usd:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "v1 converts USD SAFEs only; non-USD convertibles on file: "
+                f"{non_usd}"
+            ),
+        )
+
+    try:
+        results = compute_conversions(
+            convertibles,
+            payload.price_per_share,
+            payload.pre_safe_shares,
+            payload.options_pool,
+        )
+    except ConversionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    result_by_id = {r.convertible_id: r for r in results}
+    total_conversion_shares = sum(r.shares_issued for r in results)
+
+    preferred = _ensure_security(
+        session,
+        payload.issuer_name,
+        f"{payload.round_name} Preferred",
+        SecurityType.PREFERRED,
+        payload.round_shares + total_conversion_shares,
+    )
+    round_holder = _ensure_investor(
+        session, f"{payload.round_name} Investors (aggregate)"
+    )
+
+    round_row = PricedRound(
+        id=str(uuid4()),
+        issuer_name=payload.issuer_name,
+        round_name=payload.round_name,
+        price_per_share=payload.price_per_share,
+        round_shares=payload.round_shares,
+        post_money_shares=int(
+            payload.pre_safe_shares
+            + payload.options_pool
+            + payload.round_shares
+            + total_conversion_shares
+        ),
+        effective_date=payload.effective_date,
+        reviewer=payload.reviewer,
+        notes=payload.notes,
+        client_request_id=payload.client_request_id,
+    )
+    session.add(round_row)
+    session.flush()  # round_row.id needed by the events below
+
+    eff_dt = datetime.combine(
+        payload.effective_date, datetime.min.time(), tzinfo=timezone.utc
+    )
+
+    # 3. The round itself: aggregate primary issuance at the round price.
+    issuance_event = CapTableEvent(
+        id=str(uuid4()),
+        security_id=preferred.id,
+        target_security_id=None,
+        event_type=CapTableEventType.ISSUANCE,
+        holder_id=round_holder.id,
+        from_holder_id=None,
+        quantity=payload.round_shares,
+        price_per_share=payload.price_per_share,
+        effective_date=eff_dt,
+        notes=f"{payload.round_name} priced round (aggregate primary issuance)",
+        related_convertible_id=None,
+        related_round_id=round_row.id,
+    )
+    session.add(issuance_event)
+    session.add(
+        LedgerEntry(
+            id=str(uuid4()),
+            entry_type=LedgerEntryType.CAP_TABLE_EVENT,
+            payload={
+                "kind": "priced_round_issuance",
+                "round_id": round_row.id,
+                "round_name": payload.round_name,
+                "issuer_name": payload.issuer_name,
+                "price_per_share": payload.price_per_share,
+                "shares": payload.round_shares,
+                "reviewer": payload.reviewer,
+            },
+        )
+    )
+
+    # 4. One CONVERSION event + ledger entry per convertible, with the
+    # status flip linked atomically. Conversion is NOT 409A-gated (preferred
+    # issuance, not an option grant) and NOT routed through transfer rules
+    # (primary issuance, not a transfer).
+    for conv in convertibles:
+        r = result_by_id.get(conv.id)
+        if r is None:
+            continue
+        holder = _ensure_investor(session, conv.investor_name)
+        event = CapTableEvent(
+            id=str(uuid4()),
+            security_id=preferred.id,
+            target_security_id=preferred.id,
+            event_type=CapTableEventType.CONVERSION,
+            holder_id=holder.id,
+            from_holder_id=None,
+            quantity=r.shares_issued,
+            price_per_share=r.conversion_price,
+            effective_date=eff_dt,
+            notes=f"SAFE conversion (basis={r.pricing_basis})",
+            related_convertible_id=conv.id,
+            related_round_id=round_row.id,
+        )
+        session.add(event)
+        conv.status = ConvertibleStatus.CONVERTED
+        conv.converted_at = _utcnow()
+        conv.conversion_event_id = event.id
+        session.add(
+            LedgerEntry(
+                id=str(uuid4()),
+                entry_type=LedgerEntryType.CAP_TABLE_EVENT,
+                payload={
+                    "kind": "safe_conversion",
+                    "round_id": round_row.id,
+                    "convertible_id": conv.id,
+                    "investor_name": conv.investor_name,
+                    "pricing_basis": r.pricing_basis,
+                    "conversion_price": r.conversion_price,
+                    "shares_issued": r.shares_issued,
+                    "reviewer": payload.reviewer,
+                },
+            )
+        )
+
+    # 5. All or nothing. A concurrent duplicate commit loses the unique-
+    # constraint race and is answered with the winner's round (idempotent).
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        if payload.client_request_id:
+            existing = session.execute(
+                select(PricedRound).where(
+                    PricedRound.client_request_id == payload.client_request_id
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                response.status_code = 200
+                return _priced_round_out(existing, session)
+        raise HTTPException(status_code=409, detail="priced round commit conflict")
+
+    session.refresh(round_row)
+    return _priced_round_out(round_row, session)
+
+
+@app.get(
+    "/priced-rounds/{issuer_name}",
+    response_model=list[PricedRoundOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_priced_rounds(
+    issuer_name: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[PricedRoundOut]:
+    rounds = list(
+        session.execute(
+            select(PricedRound)
+            .where(PricedRound.issuer_name == issuer_name)
+            .order_by(PricedRound.created_at)
+        ).scalars().all()
+    )
+    return [_priced_round_out(r, session) for r in rounds]
 
 
 # ---------------------------------------------------------------------------

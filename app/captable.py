@@ -513,44 +513,69 @@ def compute_cap_table(
                     f"{event.event_type.value} event {event.id} needs holder_id and "
                     "target_security_id"
                 )
-            key_source = (event.security_id, event.holder_id)
-            if positions[key_source] < event.quantity:
-                raise CapTableError(
-                    f"{event.event_type.value} event {event.id} moves {event.quantity} "
-                    f"shares but holder {event.holder_id!r} only has {positions[key_source]}"
+            if (
+                event.event_type == CapTableEventType.CONVERSION
+                and getattr(event, "related_convertible_id", None)
+            ):
+                # SAFE/note conversion committed by a priced round: the
+                # contract lives off the cap table (convertibles table), so
+                # there is nothing to debit from any security. This is a pure
+                # credit of newly materialized shares into the target class,
+                # fully vested immediately (SAFE investors are not employees;
+                # conversion events carry no vesting fields).
+                key_target = (event.target_security_id, event.holder_id)
+                positions[key_target] += event.quantity
+                grants_by_holder[key_target].append(
+                    _GrantState(
+                        event_id=f"{event.id}-target",
+                        security_id=event.target_security_id,
+                        holder_id=event.holder_id,
+                        quantity=event.quantity,
+                        effective_date=event.effective_date,
+                        vesting_start_date=event_d,
+                        vesting_period_months=0,
+                        cliff_months=0,
+                    )
                 )
-            from_grants = grants_by_holder[key_source]
-            available_vested = sum(g.current_vested_at(event_d) for g in from_grants)
-            if available_vested < event.quantity:
-                raise CapTableError(
-                    f"{event.event_type.value} event {event.id} moves {event.quantity} "
-                    f"shares but holder {event.holder_id!r} only has {available_vested} vested shares"
-                )
-            rem = event.quantity
-            for g in from_grants:
-                v = g.current_vested_at(event_d)
-                if v <= 0:
-                    continue
-                take = min(rem, v)
-                g.transferred_vested_shares += take
-                rem -= take
-                if rem <= 0:
-                    break
+            else:
+                key_source = (event.security_id, event.holder_id)
+                if positions[key_source] < event.quantity:
+                    raise CapTableError(
+                        f"{event.event_type.value} event {event.id} moves {event.quantity} "
+                        f"shares but holder {event.holder_id!r} only has {positions[key_source]}"
+                    )
+                from_grants = grants_by_holder[key_source]
+                available_vested = sum(g.current_vested_at(event_d) for g in from_grants)
+                if available_vested < event.quantity:
+                    raise CapTableError(
+                        f"{event.event_type.value} event {event.id} moves {event.quantity} "
+                        f"shares but holder {event.holder_id!r} only has {available_vested} vested shares"
+                    )
+                rem = event.quantity
+                for g in from_grants:
+                    v = g.current_vested_at(event_d)
+                    if v <= 0:
+                        continue
+                    take = min(rem, v)
+                    g.transferred_vested_shares += take
+                    rem -= take
+                    if rem <= 0:
+                        break
 
-            positions[key_source] -= event.quantity
-            key_target = (event.target_security_id, event.holder_id)
-            positions[key_target] += event.quantity
-            target_grant = _GrantState(
-                event_id=f"{event.id}-target",
-                security_id=event.target_security_id,
-                holder_id=event.holder_id,
-                quantity=event.quantity,
-                effective_date=event.effective_date,
-                vesting_start_date=event_d,
-                vesting_period_months=0,
-                cliff_months=0,
-            )
-            grants_by_holder[key_target].append(target_grant)
+                positions[key_source] -= event.quantity
+                key_target = (event.target_security_id, event.holder_id)
+                positions[key_target] += event.quantity
+                target_grant = _GrantState(
+                    event_id=f"{event.id}-target",
+                    security_id=event.target_security_id,
+                    holder_id=event.holder_id,
+                    quantity=event.quantity,
+                    effective_date=event.effective_date,
+                    vesting_start_date=event_d,
+                    vesting_period_months=0,
+                    cliff_months=0,
+                )
+                grants_by_holder[key_target].append(target_grant)
 
         else:  # pragma: no cover
             raise CapTableError(f"Unknown event type {event.event_type!r}")

@@ -411,6 +411,49 @@ class PricedRoundPreviewOut(BaseModel):
     conversions: list[ConversionResultOut]
 
 
+class PricedRoundCreate(BaseModel):
+    """Commit terms for a priced round (Phase 3.5). ``pre_safe_shares`` and
+    ``options_pool`` must match the values used in the preview -- the commit
+    re-runs the same conversion math inside a single transaction."""
+
+    issuer_name: str = Field(..., min_length=1)
+    round_name: str = Field(..., min_length=1, max_length=64)
+    price_per_share: float = Field(gt=0)
+    round_shares: int = Field(gt=0)
+    pre_safe_shares: int = Field(ge=0)
+    options_pool: int = Field(ge=0)
+    effective_date: date
+    reviewer: str = Field(..., min_length=1)
+    notes: str | None = None
+    client_request_id: str | None = Field(default=None, max_length=64)
+
+
+class PricedRoundConversionOut(BaseModel):
+    convertible_id: str
+    investor_name: str
+    event_id: str
+    pricing_basis: str
+    conversion_price: float
+    shares_issued: float
+
+
+class PricedRoundOut(BaseModel):
+    id: str
+    issuer_name: str
+    round_name: str
+    price_per_share: float
+    round_shares: int
+    post_money_shares: int
+    effective_date: date
+    reviewer: str
+    notes: str | None = None
+    client_request_id: str | None = None
+    created_at: datetime
+    issuance_event_id: str
+    total_conversion_shares: float
+    conversions: list[PricedRoundConversionOut] = []
+
+
 # --------------------------------------------------------------------------- #
 # Capital call schemas -- Phase A approval parity
 # --------------------------------------------------------------------------- #
