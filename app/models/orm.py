@@ -31,6 +31,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -58,6 +59,7 @@ from app.models.enums import (
     TransferGate,
     TransferRuleType,
     ValuationType,
+    ConvertibleStatus,
     SYSTEM_SETTABLE,
     HUMAN_ONLY,
 )
@@ -353,6 +355,7 @@ class CapTableEvent(Base):
     __table_args__ = (
         Index("ix_captable_security_id", "security_id"),
         Index("ix_captable_effective_date", "effective_date"),
+        Index("ix_captable_related_round", "related_round_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -376,6 +379,15 @@ class CapTableEvent(Base):
     effective_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     recorded_at: Mapped[datetime] = mapped_column(default=_utcnow)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    # Priced-round provenance: the convertible this event converted (for
+    # CONVERSION) and the round that triggered it (for the round ISSUANCE
+    # and every CONVERSION it caused). Nullable -- plain events have none.
+    related_convertible_id: Mapped[str | None] = mapped_column(
+        String(64), default=None
+    )
+    related_round_id: Mapped[str | None] = mapped_column(
+        String(64), default=None
+    )
     vesting_start_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     vesting_period_months: Mapped[int | None] = mapped_column(nullable=True, default=None)
     cliff_months: Mapped[int | None] = mapped_column(nullable=True, default=None)
@@ -751,4 +763,110 @@ class Valuation(Base):
             f"<Valuation issuer={self.issuer_name!r} "
             f"type={self.valuation_type.value} "
             f"price={self.price_per_share} date={self.valuation_date}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Convertibles and priced rounds -- SAFEs live OFF the cap table until a
+# priced round commits. A convertible is a contract for future shares, not
+# a share: it never affects ownership, fully-diluted count, or voting until
+# its CONVERSION event fires (app.captable.compute_conversions).
+# ---------------------------------------------------------------------------
+
+
+class Convertible(Base):
+    """An outstanding SAFE (or note) awaiting a priced round.
+
+    Recorded from the SAFE extractor (``SafeExtraction``) or manual entry.
+    ``instrument_kind`` distinguishes post-money SAFEs (convertible by the
+    YC 2018+ formula, see PHASE-3 plan) from pre-money SAFEs (recorded but
+    rejected at conversion time in v1). While ``status`` is ``OUTSTANDING``
+    the row has NO cap-table presence; conversion flips it to ``CONVERTED``
+    and links the ``CONVERSION`` cap-table event that materialized it.
+    """
+
+    __tablename__ = "convertibles"
+    __table_args__ = (
+        Index("ix_convertibles_issuer_status", "issuer_name", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issuer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    investor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("documents.id"), default=None
+    )
+    purchase_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # "post_money_safe" | "pre_money_safe" -- pre-money is recorded but
+    # rejected at conversion time in v1 (R2).
+    instrument_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    valuation_cap: Mapped[float] = mapped_column(Float, nullable=False)
+    # 0.15 = 15% -- same fraction convention as SafeExtraction.discount_rate.
+    discount_rate: Mapped[float | None] = mapped_column(Float, default=None)
+    pro_rata_rights: Mapped[bool | None] = mapped_column(default=None)
+    mfn_clause: Mapped[bool | None] = mapped_column(default=None)
+    conversion_trigger: Mapped[str | None] = mapped_column(Text, default=None)
+    issued_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[ConvertibleStatus] = mapped_column(
+        Enum(ConvertibleStatus, native_enum=False, length=16),
+        default=ConvertibleStatus.OUTSTANDING,
+        nullable=False,
+    )
+    converted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # The cap_table_events.id of the CONVERSION event that materialized
+    # this convertible (set atomically with the status flip).
+    conversion_event_id: Mapped[str | None] = mapped_column(
+        String(64), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Convertible investor={self.investor_name!r} "
+            f"kind={self.instrument_kind} amount={self.purchase_amount} "
+            f"status={self.status.value}>"
+        )
+
+
+class PricedRound(Base):
+    """A committed priced equity round (Series A, etc.) that triggered
+    conversion of the issuer's outstanding SAFEs.
+
+    ``client_request_id`` is the idempotency key: a commit retried with the
+    same UUID returns the existing round instead of double-converting (R7).
+    The round's ISSUANCE event and every CONVERSION event it caused carry
+    ``related_round_id`` pointing back here, so one round's full audit trail
+    is a single indexed lookup.
+    """
+
+    __tablename__ = "priced_rounds"
+    __table_args__ = (
+        Index("ix_priced_rounds_issuer", "issuer_name"),
+        UniqueConstraint("client_request_id", name="uq_priced_rounds_crid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issuer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    round_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    price_per_share: Mapped[float] = mapped_column(Float, nullable=False)
+    round_shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    post_money_shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(255), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    client_request_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PricedRound issuer={self.issuer_name!r} "
+            f"round={self.round_name} price={self.price_per_share}>"
         )

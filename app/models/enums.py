@@ -229,3 +229,13 @@ class ValuationType(str, Enum):
 
     FMV_409A = "fmv_409a"
     PREFERRED_PRICE_ROUND = "preferred_price_round"
+
+
+class ConvertibleStatus(str, Enum):
+    """Lifecycle of a convertible (SAFE / note) held off the cap table.
+    OUTSTANDING convertibles are the only ones a priced round will convert;
+    CONVERTED and CANCELLED rows are immutable history."""
+
+    OUTSTANDING = "outstanding"
+    CONVERTED = "converted"
+    CANCELLED = "cancelled"
