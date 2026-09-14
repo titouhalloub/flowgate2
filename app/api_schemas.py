@@ -347,6 +347,71 @@ class LatestValuationOut(ValuationOut):
 
 
 # --------------------------------------------------------------------------- #
+# Convertibles & priced rounds -- SAFEs held off the cap table until a
+# priced round triggers conversion (CAPTABLE-ROADMAP Piece 3)
+# --------------------------------------------------------------------------- #
+
+
+class ConvertibleCreate(BaseModel):
+    issuer_name: str = Field(..., min_length=1)
+    investor_name: str = Field(..., min_length=1)
+    purchase_amount: float = Field(gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    # v1 only converts post-money SAFEs; pre-money is recorded, not converted.
+    instrument_kind: str = Field(
+        ..., pattern="^(post_money_safe|pre_money_safe)$"
+    )
+    valuation_cap: float = Field(gt=0)
+    # Stored as a fraction: 15% -> 0.15 (same convention as SafeExtraction).
+    discount_rate: float | None = Field(default=None, ge=0, le=1)
+    pro_rata_rights: bool | None = None
+    mfn_clause: bool | None = None
+    conversion_trigger: str | None = None
+    issued_date: date
+    document_id: str | None = None
+
+
+class ConvertibleOut(ConvertibleCreate):
+    id: str
+    status: str
+    converted_at: datetime | None = None
+    conversion_event_id: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PricedRoundPreviewRequest(BaseModel):
+    """Terms for a what-if conversion run. Nothing is persisted."""
+
+    issuer_name: str = Field(..., min_length=1)
+    round_price: float = Field(gt=0)
+    pre_safe_shares: int = Field(ge=0)
+    options_pool: int = Field(ge=0)
+
+
+class ConversionResultOut(BaseModel):
+    convertible_id: str
+    investor_name: str
+    purchase_amount: float
+    # "cap" or "discount" -- whichever gives the investor more shares.
+    pricing_basis: str
+    conversion_price: float
+    shares_issued: float
+    cap_price: float | None = None
+    discount_price: float | None = None
+
+
+class PricedRoundPreviewOut(BaseModel):
+    issuer_name: str
+    round_price: float
+    pre_safe_shares: int
+    options_pool: int
+    total_new_shares: float
+    conversions: list[ConversionResultOut]
+
+
+# --------------------------------------------------------------------------- #
 # Capital call schemas -- Phase A approval parity
 # --------------------------------------------------------------------------- #
 

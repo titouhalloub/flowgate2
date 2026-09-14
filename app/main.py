@@ -33,6 +33,9 @@ from app.api_schemas import (
     CapTableEventOut,
     CapTableOut,
     CapTableProposalOut,
+    ConversionResultOut,
+    ConvertibleCreate,
+    ConvertibleOut,
     DocumentOut,
     DocumentSubmit,
     ErrorOut,
@@ -51,6 +54,8 @@ from app.api_schemas import (
     PipelineRunOut,
     PipelineUploadOut,
     PortfolioHoldingOut,
+    PricedRoundPreviewRequest,
+    PricedRoundPreviewOut,
     SecurityCreate,
     SecurityOut,
     TransferEvaluationOut,
@@ -60,13 +65,20 @@ from app.api_schemas import (
     ValuationOut,
     LatestValuationOut,
 )
-from app.captable import CapTableError, compute_cap_table
+from app.captable import (
+    CapTableError,
+    ConversionError,
+    ConversionResult,
+    compute_cap_table,
+    compute_conversions,
+)
 from app.compliance import ComplianceGateway
 from app.config import settings
 from app.db import get_session, init_db
 from app.models.enums import (
     CapTableEventType,
     CapitalCallStatus,
+    ConvertibleStatus,
     ComplianceMode,
     DocumentStatus,
     IngestionSource,
@@ -86,11 +98,13 @@ from app.models.orm import (
     CapTableProposal,
     CapitalCall,
     CapitalCallPayment,
+    Convertible,
     Document,
     Holding,
     Instrument,
     Investor,
     LedgerEntry,
+    PricedRound,
     Security as SecurityModel,
     TransferEvaluation,
     TransferRule,
@@ -1029,6 +1043,121 @@ def latest_valuation(
         created_at=row.created_at,
         is_stale=months_old > _STALE_AFTER_MONTHS,
         months_old=round(months_old, 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Convertibles (outstanding SAFEs) + priced-round conversion preview
+# (CAPTABLE-ROADMAP Piece 3, Phase 3.4)
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/convertibles",
+    response_model=ConvertibleOut,
+    status_code=201,
+    responses={400: {"model": ErrorOut}, 401: {"model": ErrorOut}},
+)
+def create_convertible(
+    payload: ConvertibleCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> Convertible:
+    convertible = Convertible(
+        id=str(uuid4()),
+        issuer_name=payload.issuer_name,
+        investor_name=payload.investor_name,
+        document_id=payload.document_id,
+        purchase_amount=payload.purchase_amount,
+        currency=payload.currency,
+        instrument_kind=payload.instrument_kind,
+        valuation_cap=payload.valuation_cap,
+        discount_rate=payload.discount_rate,
+        pro_rata_rights=payload.pro_rata_rights,
+        mfn_clause=payload.mfn_clause,
+        conversion_trigger=payload.conversion_trigger,
+        issued_date=payload.issued_date,
+    )
+    session.add(convertible)
+    session.commit()
+    session.refresh(convertible)
+    return convertible
+
+
+@app.get(
+    "/convertibles/{issuer_name}",
+    response_model=list[ConvertibleOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_convertibles(
+    issuer_name: str,
+    status: str | None = Query(
+        default=None, pattern="^(outstanding|converted|cancelled)$"
+    ),
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[Convertible]:
+    stmt = (
+        select(Convertible)
+        .where(Convertible.issuer_name == issuer_name)
+        .order_by(Convertible.issued_date)
+    )
+    if status is not None:
+        stmt = stmt.where(Convertible.status == status)
+    return list(session.execute(stmt).scalars().all())
+
+
+@app.post(
+    "/priced-rounds/preview",
+    response_model=PricedRoundPreviewOut,
+    responses={400: {"model": ErrorOut}, 401: {"model": ErrorOut}},
+)
+def preview_priced_round(
+    payload: PricedRoundPreviewRequest,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> PricedRoundPreviewOut:
+    """Compute what a priced round would convert for an issuer's outstanding
+    SAFEs -- without persisting anything. The commit endpoint (Phase 3.5)
+    re-runs the same math inside a single transaction."""
+    convertibles = list(
+        session.execute(
+            select(Convertible).where(
+                Convertible.issuer_name == payload.issuer_name,
+                Convertible.status == "outstanding",
+            )
+        ).scalars()
+    )
+    try:
+        results = compute_conversions(
+            convertibles,
+            payload.round_price,
+            payload.pre_safe_shares,
+            payload.options_pool,
+        )
+    except ConversionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    conversions_out = [
+        ConversionResultOut(
+            convertible_id=r.convertible_id,
+            investor_name=r.investor_name,
+            purchase_amount=r.purchase_amount,
+            pricing_basis=r.pricing_basis,
+            conversion_price=r.conversion_price,
+            shares_issued=r.shares_issued,
+            cap_price=r.cap_price,
+            discount_price=r.discount_price,
+        )
+        for r in results
+    ]
+    return PricedRoundPreviewOut(
+        issuer_name=payload.issuer_name,
+        round_price=payload.round_price,
+        pre_safe_shares=payload.pre_safe_shares,
+        options_pool=payload.options_pool,
+        total_new_shares=sum(c.shares_issued for c in conversions_out),
+        conversions=conversions_out,
     )
 
 
