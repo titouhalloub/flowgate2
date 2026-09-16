@@ -5,6 +5,7 @@ services:
     dockerfilePath: ./Dockerfile
     buildCommand: ""
     startCommand: ""
+    preDeployCommand: alembic upgrade head
     healthCheckPath: /health
     disk:
       name: flowgate-data
@@ -20,6 +21,6 @@ services:
       - key: A27_LLM_BACKEND_PREFERENCE
         value: openrouter
       - key: A27_DATABASE_URL
-        value: sqlite:////var/data/a27.db
+        sync: false
       - key: A27_UPLOADS_DIR
         value: /var/data/uploads
