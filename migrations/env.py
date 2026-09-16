@@ -1,5 +1,6 @@
 """Alembic environment — autogenerates from the ORM metadata."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,15 +20,21 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    # DATABASE_URL wins over alembic.ini: the ini path is a local SQLite
+    # default, while Render/production must migrate the Neon URL from the env.
+    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
+    section = config.get_section(config.config_ini_section, {})
+    env_url = os.environ.get("DATABASE_URL")
+    if env_url:
+        section["sqlalchemy.url"] = env_url
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
