@@ -667,6 +667,10 @@ export default function App() {
                 onApproveProposal={handleApproveProposal}
                 onRejectProposal={handleRejectProposal}
                 onLinkInvestor={handleLinkInvestor}
+                onError={setErrorBoxMsg}
+                onRequestRefresh={() => {
+                  void refreshFromServer();
+                }}
               />
             </div>
           )}

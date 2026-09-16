@@ -9,6 +9,7 @@ import {
   LatestValuation,
 } from '../types';
 import { ApiRequestError, listConvertibles } from '../services/api';
+import { PricedRoundModal } from './PricedRoundModal';
 import {
   PlusCircle,
   Clock,
@@ -106,6 +107,12 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   const [convertiblesLoading, setConvertiblesLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'outstanding' | 'all'>('outstanding');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // Bumped after a priced-round commit so the panel re-fetches its list --
+  // refreshFromServer() in App.tsx does not re-render this panel's own query.
+  const [refreshKey, setRefreshKey] = useState(0);
+  // Session-scoped nudge: set when a priced round commits, cleared by the x.
+  // Deliberately not persisted -- a yesterday-stale nag would be noise.
+  const [show409ABadge, setShow409ABadge] = useState(false);
 
   // Load the issuer's convertibles on mount and whenever the filter changes.
   // 4xx is a backend REJECTION -> surface err.message on the parent's error
@@ -140,12 +147,19 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
       cancelled = true;
     };
     // onError is a setState wrapper from App.tsx and therefore stable; omitting
-    // it keeps the fetch from re-firing on every parent render.
+    // it keeps the fetch from re-firing on every parent render. refreshKey
+    // re-fires the fetch after a priced-round commit converts SAFEs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter]);
+  }, [statusFilter, refreshKey]);
 
   const handlePricedRoundCommitted = () => {
     setIsModalOpen(false);
+    // Panel-local re-fetch: bump the key the convertibles effect depends on
+    // so the list reflects the SAFEs this round just converted.
+    setRefreshKey((k) => k + 1);
+    // Non-blocking nudge: a fresh priced round should be followed by a
+    // refreshed 409A before new grants price off the old FMV.
+    setShow409ABadge(true);
     onRequestRefresh?.();
   };
 
@@ -331,6 +345,21 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
                 ⚠ {Math.round(latest409a.months_old)} months old — refresh recommended
               </span>
             )}
+          </div>
+        )}
+
+        {/* Phase 3.7 -- session-scoped nudge after a priced-round commit.
+            No persistence, no backend call; sits where the FMV strip sits. */}
+        {show409ABadge && (
+          <div className="mt-4 flex w-fit items-center gap-2 rounded-full bg-[#FFF4E5] text-[#9A6A1B] border border-[#F5D9A8] px-4 py-2 text-xs font-bold uppercase tracking-wide">
+            <span>409A refresh recommended</span>
+            <button
+              onClick={() => setShow409ABadge(false)}
+              aria-label="Dismiss 409A refresh badge"
+              className="text-[#9A6A1B]/60 hover:text-[#9A6A1B] cursor-pointer text-sm leading-none"
+            >
+              ×
+            </button>
           </div>
         )}
       </div>
@@ -1098,6 +1127,16 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Record Priced Round Modal (Phase 3.7) -- preview is a pure what-if;
+          only "Commit round" writes, and the modal reports the outcome. */}
+      <PricedRoundModal
+        isOpen={isModalOpen}
+        issuerName={ISSUER_NAME}
+        onClose={() => setIsModalOpen(false)}
+        onCommitted={handlePricedRoundCommitted}
+        onError={(msg) => onError?.(msg)}
+      />
     </div>
   );
 };
