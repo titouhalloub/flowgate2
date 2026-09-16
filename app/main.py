@@ -1645,6 +1645,24 @@ def create_cap_table_proposal(
         )
 
     data = (doc.extracted_data or {}).get("data", {})
+    schema_name = data.get("schema_name")
+
+    if schema_name == "SafeExtraction":
+        instrument = session.get(Instrument, doc.instrument_id)
+        proposal = _maybe_create_convertible_proposal(session, doc, instrument)
+        if proposal is None:
+            raise HTTPException(
+                status_code=400,
+                detail="SAFE document did not produce a convertible proposal",
+            )
+        return proposal
+
+    if schema_name != "EquitySubscriptionExtraction":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported document type for cap-table proposal: {schema_name!r}",
+        )
+
     parsed = EquitySubscriptionExtraction.model_validate(data)
     if not parsed.company_name or parsed.share_count is None:
         raise HTTPException(

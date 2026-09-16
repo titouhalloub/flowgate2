@@ -66,6 +66,7 @@ def _backfill_deal_container(
             instrument.issuer_name = data[key]
             break
     for key in (
+        "purchase_amount",
         "principal_amount",
         "total_size",
         "commitment_amount",
