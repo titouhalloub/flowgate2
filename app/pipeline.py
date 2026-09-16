@@ -134,6 +134,7 @@ def process_document(session: Session, instrument: Instrument,
         doc = make_doc(DocumentType.UNCLASSIFIED, classification.confidence, 0.0,
                        IngestionSource.MANUAL_ENTRY, DocumentStatus.REVIEW_NEEDED)
         session.add(doc)
+        session.flush()  # FK-order: document must exist before ledger rows reference it
         ledger(doc, "classification",
                {"outcome": "unclassified", "confidence": classification.confidence})
         session.commit()
@@ -161,6 +162,7 @@ def process_document(session: Session, instrument: Instrument,
         doc.extracted_data = outcome.extracted_data
         doc.error_message = outcome.error
         session.add(doc)
+        session.flush()  # FK-order: document must exist before ledger rows reference it
         ledger(doc, "extraction",
                {"outcome": "review", "confidence": outcome.confidence,
                 "schema": outcome.schema_name})
@@ -176,6 +178,7 @@ def process_document(session: Session, instrument: Instrument,
                    DocumentStatus.PROCESSED)
     doc.extracted_data = outcome.extracted_data
     session.add(doc)
+    session.flush()  # FK-order: document must exist before ledger rows reference it
 
     prior_docs = session.query(Document).filter(
         Document.instrument_id == instrument.id,

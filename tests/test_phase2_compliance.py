@@ -124,6 +124,8 @@ def test_gateway_emits_trace(db):
     session.add(instr)
     session.flush()
     docs = [make_document(instr, doc_type=DocumentType.FATWA)]
+    session.add(docs[0])
+    session.flush()  # FK-order: ledger rows may only reference persisted documents
     run_gateway_with_ledger(session, instr, docs)
     trace = find_trace("compliance.gateway")
     assert trace is not None, "gateway decision must emit a telemetry trace"

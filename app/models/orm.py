@@ -220,6 +220,17 @@ class Document(Base):
 
     instrument: Mapped["Instrument"] = relationship(back_populates="documents")
 
+    # Ledger entries that reference this document. Declaring the relationship
+    # gives SQLAlchemy the unit-of-work edge it needs to order the INSERTs
+    # (documents before ledger_entries); the raw ForeignKey alone does not.
+    # No delete cascade -- ledger entries are append-only and outlive their
+    # source document.
+    ledger_entries: Mapped[list["LedgerEntry"]] = relationship(
+        "LedgerEntry",
+        foreign_keys="LedgerEntry.document_id",
+        back_populates="document",
+    )
+
     @validates("shariah_review_status")
     def _validate_doc_review_status(self, key: str, value: Any) -> ShariahReviewStatus:
         value = (
@@ -270,6 +281,11 @@ class LedgerEntry(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw_input: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    document: Mapped["Document | None"] = relationship(
+        "Document",
+        foreign_keys="LedgerEntry.document_id",
+        back_populates="ledger_entries",
+    )
 
     def __repr__(self) -> str:
         return (
