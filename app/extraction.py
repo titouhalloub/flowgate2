@@ -163,6 +163,33 @@ def _money_after(text: str, keyword_pattern: str, window: int = 80):
     return None, None
 
 
+def _money_before(text: str, keyword_pattern: str, window: int = 80):
+    """Keyword-anchored money lookup looking BACKWARD from the keyword.
+
+    Some SAFE forms state the amount before the label:
+        "$500,000 (the \"Purchase Amount\")"
+    which _money_after cannot see because the money precedes the keyword.
+    """
+    cur_amt = re.compile(r"(" + _CURRENCY + r")[\s$]*(" + _AMOUNT + r")")
+    amt_cur = re.compile(r"(" + _AMOUNT + r")\s*(" + _CURRENCY + r")")
+    for m in re.finditer(keyword_pattern, text, re.IGNORECASE):
+        start = max(0, m.start() - window)
+        segment = text[start:m.start()]
+        candidates: list[tuple[int, float, str | None]] = []
+        for mm in cur_amt.finditer(segment):
+            if _plausible_amount(mm.group(2)):
+                candidates.append((mm.start(2), float(mm.group(2).replace(",", "")), mm.group(1).upper()[:3]))
+        for mm in amt_cur.finditer(segment):
+            if _plausible_amount(mm.group(1)):
+                candidates.append((mm.start(1), float(mm.group(1).replace(",", "")), mm.group(2).upper()[:3]))
+        for mm in _DOLLAR_AMOUNT.finditer(segment):
+            candidates.append((mm.start(2), float(mm.group(2).replace(",", "")), "USD"))
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
+            return candidates[0][1], candidates[0][2]
+    return None, None
+
+
 def _money_anywhere(text: str):
     """Fallback: the first plausible, explicitly-currency-denominated amount
     in the document. A bare number is never money — without a currency token
@@ -693,6 +720,14 @@ def extract_safe(text: str) -> tuple[SafeExtraction | None, float]:
         window=80)
     if purchase is None:
         purchase, cur = _money_after(text, r"\bpurchas", window=80)
+    if purchase is None:
+        # Many SAFEs state the amount before the label:
+        #   "$500,000 (the \"Purchase Amount\")"
+        # _money_after looks forward only; try backward too.
+        purchase, cur = _money_before(
+            text,
+            r"(?:purchase\s+amount|purchase\s+price|amount\s+invested)",
+            window=100)
     valuation_cap, cap_cur = _money_after(
         text, r"(?:post[- ]?money\s+)?valuation\s+cap", window=80)
 
@@ -739,7 +774,7 @@ def extract_safe(text: str) -> tuple[SafeExtraction | None, float]:
         instrument_kind = "pre_money_safe"
 
     conversion_trigger = _clean_name(_grep(
-        r"(?:upon|on|in\s+the\s+event\s+of)\s+(?:the\s+|a\s+)?"
+        r"(?:upon|on|in\s+the\s+event\s+of)\s+(?:the\s+|an?\s+)?"
         r"((?:equity\s+financing|liquidity\s+event|change\s+of\s+control|"
         r"dissolution)[^.]{0,40})",
         text))

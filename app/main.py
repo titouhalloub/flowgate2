@@ -12,9 +12,10 @@ import logging
 import re
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+from typing import Union
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -131,6 +132,63 @@ from app.transfer_rules import (
 async def _lifespan(app: FastAPI):
     init_db()
     yield
+
+
+def _maybe_create_convertible_proposal(session, document, instrument):
+    """If this document is a successful SAFE extraction, create a pending
+    CREATE_CONVERTIBLE proposal. Never creates a Convertible row directly —
+    that happens only on approval.
+
+    Idempotent: if a CREATE_CONVERTIBLE proposal already exists for this
+    document_id in any status, do nothing and return None.
+    """
+    from app.models.enums import DocumentStatus, DocumentType, ProposalType
+    from app.models.enums import ProposalStatus
+    from app.models.orm import CapTableProposal
+
+    if document is None or document.document_type != DocumentType.SAFE:
+        return None
+    if document.status != DocumentStatus.PROCESSED:
+        return None
+
+    existing = session.query(CapTableProposal).filter(
+        CapTableProposal.proposal_type == ProposalType.CREATE_CONVERTIBLE,
+        CapTableProposal.document_id == document.id,
+    ).first()
+    if existing is not None:
+        return existing
+
+    data = (document.extracted_data or {}).get("data", {})
+    if not data:
+        return None
+
+    payload = {
+        "document_id": document.id,
+        "instrument_id": instrument.id,
+        "issuer_name": instrument.issuer_name,
+        "investor_name": data.get("investor_name"),
+        "purchase_amount": data.get("purchase_amount"),
+        "currency": data.get("currency", "USD"),
+        "instrument_kind": data.get("instrument_kind"),
+        "valuation_cap": data.get("valuation_cap"),
+        "discount_rate": data.get("discount_rate"),
+        "pro_rata_rights": data.get("pro_rata_rights"),
+        "mfn_clause": data.get("mfn_clause"),
+        "conversion_trigger": data.get("conversion_trigger"),
+        "issued_date": data.get("document_date"),
+    }
+
+    proposal = CapTableProposal(
+        id=str(uuid4()),
+        instrument_id=instrument.id,
+        document_id=document.id,
+        proposal_type=ProposalType.CREATE_CONVERTIBLE,
+        status=ProposalStatus.PROPOSED,
+        payload=payload,
+    )
+    session.add(proposal)
+    session.commit()
+    return proposal
 
 
 app = FastAPI(
@@ -290,6 +348,7 @@ def submit_document(
         session, instrument, ComplianceGateway(), payload.text, filename=payload.filename
     )
     session.refresh(instrument)
+    _maybe_create_convertible_proposal(session, result.document, instrument)
 
     return PipelineRunOut(
         document=DocumentOut.model_validate(result.document),
@@ -360,6 +419,7 @@ def upload_document(
         file_url=stored_url,
     )
     session.refresh(instrument)
+    _maybe_create_convertible_proposal(session, result.document, instrument)
 
     return PipelineUploadOut(
         document=DocumentOut.model_validate(result.document),
@@ -1639,7 +1699,7 @@ def create_cap_table_proposal(
 
 @app.post(
     "/cap-table-proposals/{proposal_id}/approve",
-    response_model=CapTableEventOut,
+    response_model=Union[CapTableEventOut, ConvertibleOut],
     responses={
         401: {"model": ErrorOut},
         404: {"model": ErrorOut},
@@ -1651,7 +1711,7 @@ def approve_cap_table_proposal(
     reviewer: str,
     session: Session = Depends(get_session),
     _: str = Depends(require_api_key),
-) -> CapTableEvent:
+) -> Union[CapTableEvent, Convertible]:
     """The human gate. Materializes the proposed issuance as a real
     CapTableEvent -- the ONLY path from an extracted document into the
     cap table, matching how CapitalCall approval already works."""
@@ -1668,6 +1728,63 @@ def approve_cap_table_proposal(
         )
     if not reviewer or not reviewer.strip():
         raise HTTPException(status_code=409, detail="A named reviewer is required")
+    if proposal.proposal_type == ProposalType.CREATE_CONVERTIBLE:
+        p = proposal.payload or {}
+        investor_name = p.get("investor_name")
+        purchase_amount = p.get("purchase_amount")
+        if not investor_name or purchase_amount is None:
+            raise HTTPException(
+                status_code=400,
+                detail="CREATE_CONVERTIBLE proposal is missing required "
+                       "fields (investor_name, purchase_amount)",
+            )
+        raw_date = p.get("issued_date")
+        try:
+            issued = date.fromisoformat(raw_date) if raw_date else date.today()
+        except (ValueError, TypeError):
+            issued = date.today()
+
+        convertible = Convertible(
+            id=str(uuid4()),
+            issuer_name=p.get("issuer_name") or "unknown",
+            investor_name=investor_name,
+            document_id=p.get("document_id"),
+            purchase_amount=float(purchase_amount),
+            currency=(p.get("currency") or "USD")[:3].upper(),
+            instrument_kind=p.get("instrument_kind") or "post_money_safe",
+            valuation_cap=float(p.get("valuation_cap") or 0.0),
+            discount_rate=p.get("discount_rate"),
+            pro_rata_rights=p.get("pro_rata_rights"),
+            mfn_clause=p.get("mfn_clause"),
+            conversion_trigger=p.get("conversion_trigger"),
+            issued_date=issued,
+            status=ConvertibleStatus.OUTSTANDING,
+        )
+        session.add(convertible)
+        proposal.status = ProposalStatus.APPROVED
+        try:
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        session.refresh(convertible)
+
+        session.add(LedgerEntry(
+            id=str(uuid4()),
+            entry_type=LedgerEntryType.CAP_TABLE_PROPOSAL,
+            instrument_id=proposal.instrument_id,
+            document_id=proposal.document_id,
+            payload={
+                "event": "convertible_proposal_approved",
+                "proposal_id": proposal.id,
+                "convertible_id": convertible.id,
+                "investor_name": investor_name,
+                "purchase_amount": float(purchase_amount),
+                "reviewer": reviewer.strip(),
+            },
+        ))
+        session.commit()
+        return convertible
     payload = proposal.payload or {}
     if payload.get("subscriber_unresolved"):
         raise HTTPException(

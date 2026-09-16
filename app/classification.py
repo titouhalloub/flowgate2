@@ -343,6 +343,7 @@ _FILENAME_ABBREVS: dict[str, set[str]] = {
     "subscription": {"subagmt", "subscr", "subagree"},
     "loan": {"ln", "loa"},
     "sukuk": {"suk"},
+    "safe agreement": {"safe"},
 }
 
 def classify_with_heuristics(text: str, filename: str = "") -> ClassificationResult:
@@ -503,7 +504,7 @@ def classify_with_heuristics(text: str, filename: str = "") -> ClassificationRes
     if fname_bonus > 0:
         # Each filename match adds 0.15, capped at 0.98 so the gate is the
         # primary filter and this is truly a boost.
-        confidence = min(0.98, confidence + 0.15 * fname_bonus)
+        confidence = min(0.98, confidence + 0.25 * fname_bonus)
 
     return ClassificationResult(document_type=best_type, confidence=confidence)
 

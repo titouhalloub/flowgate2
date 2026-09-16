@@ -130,6 +130,7 @@ class ProposalType(str, Enum):
     vocabulary without changing the human approval gate."""
 
     CAP_TABLE_PROPOSAL = "cap_table_proposal"
+    CREATE_CONVERTIBLE = "create_convertible"
 
 
 class SecurityType(str, Enum):
