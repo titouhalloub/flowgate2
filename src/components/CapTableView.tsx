@@ -27,8 +27,7 @@ import {
 // Phase 3.7 -- issuer for the convertibles panel. Hardcoded to match the rest
 // of the demo path in App.tsx.
 // TODO: parameterize when multi-issuer support lands.
-const ISSUER_NAME = 'Flowgate Systems Inc.';
-
+const ISSUER_NAME = 'Acme Robotics Inc.';
 // Rendering helpers for the convertibles table.
 function formatMoney(amount: number, currency: string): string {
   const symbol = currency === 'USD' ? '$' : `${currency} `;
