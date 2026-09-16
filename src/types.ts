@@ -243,3 +243,78 @@ export interface PipelineRunResult {
   ledger_entries: LedgerEntry[];
   proposal_created?: CapTableProposal | null;
 }
+
+// ---------------------------------------------------------------------------
+// Convertibles & priced rounds -- SAFEs held off the cap table until a priced
+// round triggers conversion (CAPTABLE-ROADMAP Piece 3, Phases 3.4-3.7).
+// Mirrors app/api_schemas.py: ConvertibleOut / ConversionResultOut /
+// PricedRoundPreviewOut / PricedRoundConversionOut / PricedRoundOut.
+// ---------------------------------------------------------------------------
+
+export interface Convertible {
+  id: string;
+  issuer_name: string;
+  investor_name: string;
+  document_id: string | null;
+  purchase_amount: number;
+  currency: string;
+  instrument_kind: string;
+  valuation_cap: number;
+  discount_rate: number | null;
+  pro_rata_rights: boolean | null;
+  mfn_clause: boolean | null;
+  conversion_trigger: string | null;
+  issued_date: string;
+  status: 'outstanding' | 'converted' | 'cancelled';
+  converted_at: string | null;
+  conversion_event_id: string | null;
+  created_at: string;
+}
+
+/** What-if conversion row from POST /priced-rounds/preview. */
+export interface ConversionResult {
+  convertible_id: string;
+  investor_name: string;
+  purchase_amount: number;
+  pricing_basis: 'cap' | 'discount';
+  conversion_price: number;
+  shares_issued: number;
+  cap_price: number | null;
+  discount_price: number | null;
+}
+
+export interface PricedRoundPreview {
+  issuer_name: string;
+  round_price: number;
+  pre_safe_shares: number;
+  options_pool: number;
+  total_new_shares: number;
+  conversions: ConversionResult[];
+}
+
+/** Committed conversion row -- carries the ledger event id, not the prices. */
+export interface PricedRoundConversion {
+  convertible_id: string;
+  investor_name: string;
+  event_id: string;
+  pricing_basis: 'cap' | 'discount';
+  conversion_price: number;
+  shares_issued: number;
+}
+
+export interface PricedRound {
+  id: string;
+  issuer_name: string;
+  round_name: string;
+  price_per_share: number;
+  round_shares: number;
+  post_money_shares: number;
+  effective_date: string;
+  reviewer: string;
+  notes: string | null;
+  client_request_id: string | null;
+  created_at: string;
+  issuance_event_id: string;
+  total_conversion_shares: number;
+  conversions: PricedRoundConversion[];
+}

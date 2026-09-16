@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   CapTableSnapshot,
   CapTableEvent,
   CapTableProposal,
+  Convertible,
   Investor,
   CapTableEventType,
   LatestValuation,
 } from '../types';
+import { ApiRequestError, listConvertibles } from '../services/api';
 import {
   PlusCircle,
   Clock,
@@ -21,6 +23,27 @@ import {
   Lock,
 } from 'lucide-react';
 
+// Phase 3.7 -- issuer for the convertibles panel. Hardcoded to match the rest
+// of the demo path in App.tsx.
+// TODO: parameterize when multi-issuer support lands.
+const ISSUER_NAME = 'Flowgate Systems Inc.';
+
+// Rendering helpers for the convertibles table.
+function formatMoney(amount: number, currency: string): string {
+  const symbol = currency === 'USD' ? '$' : `${currency} `;
+  return `${symbol}${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+}
+
+function formatDiscount(rate: number | null): string {
+  return rate === null ? '\u2014' : `${Math.round(rate * 100)}%`;
+}
+
+function formatIssuedDate(iso: string): string {
+  if (!iso) return '\u2014';
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleDateString();
+}
+
 interface CapTableViewProps {
   snapshot: CapTableSnapshot;
   events: CapTableEvent[];
@@ -32,6 +55,14 @@ interface CapTableViewProps {
   onApproveProposal: (proposalId: string, reviewer: string) => void;
   onRejectProposal: (proposalId: string, reviewer: string) => void;
   onLinkInvestor: (proposalId: string, investorId: string) => void;
+  /**
+   * Parent's rejection-banner setter. Live handlers surface 4xx detail here
+   * (the pattern used by handleRecordEvent in App.tsx); network/5xx stay
+   * silent. Optional so the panel degrades to a plain empty list if unwired.
+   */
+  onError?: (msg: string) => void;
+  /** Parent re-fetch hook, called after a priced round is committed. */
+  onRequestRefresh?: () => void;
 }
 
 export const CapTableView: React.FC<CapTableViewProps> = ({
@@ -44,6 +75,8 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   onApproveProposal,
   onRejectProposal,
   onLinkInvestor,
+  onError,
+  onRequestRefresh,
 }) => {
   const [showEventModal, setShowEventModal] = useState(false);
   const [reviewerName, setReviewerName] = useState('Sarah Jenkins (Legal VP)');
@@ -67,6 +100,54 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   // Cancellation / repurchase
   const [isRepurchase, setIsRepurchase] = useState(false);
   const [repurchaseApprover, setRepurchaseApprover] = useState('');
+
+  // Phase 3.7 -- convertibles panel state.
+  const [convertibles, setConvertibles] = useState<Convertible[]>([]);
+  const [convertiblesLoading, setConvertiblesLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'outstanding' | 'all'>('outstanding');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Load the issuer's convertibles on mount and whenever the filter changes.
+  // 4xx is a backend REJECTION -> surface err.message on the parent's error
+  // box (never demo-fall back); network / 5xx is an outage -> stay silent and
+  // just show an empty list.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setConvertiblesLoading(true);
+      try {
+        const rows = await listConvertibles(
+          ISSUER_NAME,
+          statusFilter === 'outstanding' ? 'outstanding' : undefined,
+        );
+        if (!cancelled) setConvertibles(rows);
+      } catch (err) {
+        if (
+          !cancelled &&
+          err instanceof ApiRequestError &&
+          err.status >= 400 &&
+          err.status < 500
+        ) {
+          onError?.(err.message);
+        }
+        if (!cancelled) setConvertibles([]);
+      } finally {
+        if (!cancelled) setConvertiblesLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // onError is a setState wrapper from App.tsx and therefore stable; omitting
+    // it keeps the fetch from re-firing on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
+
+  const handlePricedRoundCommitted = () => {
+    setIsModalOpen(false);
+    onRequestRefresh?.();
+  };
 
   const colors = [
     'bg-[#FAB005]',
@@ -497,6 +578,129 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Convertibles Panel (Phase 3.7) -- SAFEs held against this issuer.
+          Terms come from the SAFE extraction; only a committed priced round
+          converts them. Reads live-only: an empty list covers both "none on
+          file" and "backend unreachable". */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 shadow-xs border border-gray-100 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#EBE7FD] text-[#7048E8] flex items-center justify-center">
+              <Layers className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-gray-900">Convertibles</h3>
+              <p className="text-[11px] text-gray-500">
+                SAFEs with a valuation cap / discount — converted at the next priced round
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
+              <button
+                onClick={() => setStatusFilter('outstanding')}
+                className={`px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                  statusFilter === 'outstanding'
+                    ? 'bg-[#7048E8] text-white'
+                    : 'bg-white text-gray-600 hover:bg-[#F4F6FC]'
+                }`}
+              >
+                Outstanding
+              </button>
+              <button
+                onClick={() => setStatusFilter('all')}
+                className={`px-3 py-1.5 text-xs font-bold border-l border-gray-200 transition-colors cursor-pointer ${
+                  statusFilter === 'all'
+                    ? 'bg-[#7048E8] text-white'
+                    : 'bg-white text-gray-600 hover:bg-[#F4F6FC]'
+                }`}
+              >
+                All
+              </button>
+            </div>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#7048E8] hover:bg-[#5C38D1] text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Record a priced round
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="text-gray-500 border-b border-gray-100">
+                <th className="px-3 py-2.5">Holder</th>
+                <th className="px-3 py-2.5 text-right">Amount</th>
+                <th className="px-3 py-2.5 text-right">Cap</th>
+                <th className="px-3 py-2.5 text-right">Discount</th>
+                <th className="px-3 py-2.5">Issued</th>
+                <th className="px-3 py-2.5">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {convertiblesLoading && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-8 text-center text-gray-400">
+                    Loading convertibles...
+                  </td>
+                </tr>
+              )}
+
+              {!convertiblesLoading && convertibles.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-8 text-center text-gray-400">
+                    {statusFilter === 'outstanding'
+                      ? 'No outstanding convertibles.'
+                      : 'No convertibles.'}
+                  </td>
+                </tr>
+              )}
+
+              {!convertiblesLoading &&
+                convertibles.map((c) => (
+                  <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-[#FAFAFE]">
+                    <td className="px-3 py-2.5">
+                      <div className="font-semibold text-gray-900">{c.investor_name}</div>
+                      <div className="text-[10px] text-gray-400">
+                        {c.instrument_kind.replace(/_/g, ' ')}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono text-gray-900">
+                      {formatMoney(c.purchase_amount, c.currency)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono text-gray-600">
+                      {c.valuation_cap ? formatMoney(c.valuation_cap, c.currency) : '\u2014'}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono text-gray-600">
+                      {formatDiscount(c.discount_rate)}
+                    </td>
+                    <td className="px-3 py-2.5 text-gray-600">
+                      {formatIssuedDate(c.issued_date)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                          c.status === 'outstanding'
+                            ? 'bg-[#FFF4E5] text-[#9A6A1B] border-[#F5D9A8]'
+                            : c.status === 'converted'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-gray-50 text-gray-500 border-gray-200'
+                        }`}
+                      >
+                        {c.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
 
       {/* Grants & Vesting Schedules Panel — only shown when grants present */}
       {snapshot.grants && snapshot.grants.length > 0 && (
