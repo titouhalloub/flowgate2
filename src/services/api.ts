@@ -2,10 +2,14 @@ import {
   CapTableEvent,
   CapTableProposal,
   CapitalCall,
+  CapitalCallPayment,
   CapitalCallStatus,
+  Convertible,
   Investor,
   LatestValuation,
   LedgerEntry,
+  PricedRound,
+  PricedRoundPreview,
   ProposalStatus,
 } from '../types';
 
@@ -475,4 +479,56 @@ export async function ensureHolder(
   const created = await createInvestor(holderName, investorType);
   holderIdCache.set(holderName, created.id);
   return created.id;
+}
+
+// ---------------------------------------------------------------------------
+// Convertibles (outstanding SAFEs) + priced rounds -- Phase 3.7 UI wiring.
+// SAFEs stay off the cap table until a priced round triggers conversion.
+// /priced-rounds/preview is pure what-if (nothing persisted); /priced-rounds
+// commits the conversion math plus the issuance in one transaction.
+// ---------------------------------------------------------------------------
+
+// GET /convertibles/{issuer_name} -- optionally filtered to one lifecycle
+// status. Rows are the backend DTO shape verbatim (no mapper needed).
+export async function listConvertibles(
+  issuerName: string,
+  status?: 'outstanding' | 'converted' | 'cancelled',
+): Promise<Convertible[]> {
+  const qs = status ? `?status=${status}` : '';
+  return request(`/convertibles/${encodeURIComponent(issuerName)}${qs}`);
+}
+
+export async function previewPricedRound(payload: {
+  issuer_name: string;
+  round_price: number;
+  pre_safe_shares: number;
+  options_pool: number;
+}): Promise<PricedRoundPreview> {
+  return request('/priced-rounds/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// pre_safe_shares and options_pool are required by the commit endpoint: it
+// re-runs the same conversion math as the preview inside one transaction, so
+// it must receive the identical inputs the preview was shown with.
+export async function createPricedRound(payload: {
+  issuer_name: string;
+  round_name: string;
+  price_per_share: number;
+  round_shares: number;
+  pre_safe_shares: number;
+  options_pool: number;
+  effective_date: string;   // ISO date "YYYY-MM-DD"
+  reviewer: string;
+  notes?: string;
+  client_request_id?: string;
+}): Promise<PricedRound> {
+  return request('/priced-rounds', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
