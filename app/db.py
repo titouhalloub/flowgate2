@@ -52,7 +52,25 @@ def _resolve_sqlite_url(url: str) -> str:
 
 
 settings.database_url = _resolve_sqlite_url(settings.database_url)
-engine = create_engine(settings.database_url, future=True)
+_db_url = settings.database_url
+_engine_kwargs: dict = {"future": True}
+
+if _db_url.startswith("postgresql"):
+    # Neon (and other serverless Postgres) suspend compute when idle. The
+    # first connection after a cold start can hit a dead socket; without
+    # pool_pre_ping the dead connection is handed to the caller and the
+    # request 500s. pre_ping tests the connection before use and transparently
+    # reconnects if dead. pool_recycle caps connection lifetime below Neon's
+    # idle cutoff so stale sockets do not accumulate. connect_timeout caps
+    # the wake-up wait so a slow cold start becomes a fast failure rather
+    # than a hung request.
+    _engine_kwargs.update(
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={"connect_timeout": 10},
+    )
+
+engine = create_engine(_db_url, **_engine_kwargs)
 
 
 @event.listens_for(Engine, "connect")
