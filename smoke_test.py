@@ -10,6 +10,11 @@ Usage:
 Env fallbacks: SMOKE_BASE_URL, SMOKE_API_KEY.
 The server MUST have A27_API_KEYS configured -- auth is fail-closed (an empty
 allowlist answers 503, never 200), so a green run also proves auth is set up.
+
+One check, ``assistant-knows-a-convertible``, additionally REQUIRES a live LLM
+key on the server (A27_OPENROUTER_API_KEY or A27_ANTHROPIC_API_KEY). It is
+expected to FAIL against a keyless backend, by design -- see the comment on
+that check.
 """
 
 from __future__ import annotations
@@ -258,6 +263,41 @@ def main() -> int:
         f"POST /priced-rounds/preview -> {r.status_code}, conversions={len(conversions)}, "
         f"total_new_shares={preview.get('total_new_shares')}",
     )
+
+    # 16. The read-only assistant answers from a populated knowledge base.
+    # THIS CHECK REQUIRES A LIVE LLM KEY on the backend (A27_OPENROUTER_API_KEY
+    # or A27_ANTHROPIC_API_KEY). It is the only check in this file that cannot
+    # pass without one: the heuristic backend classifies documents but cannot
+    # answer prose questions, so a keyless server returns "I couldn't reach the
+    # language model". That failure is deliberate -- a demo-visible red line
+    # beats a silently mute assistant that looks healthy.
+    # It doubles as a deploy check: an image built without the repo-root
+    # markdown answers "knowledge base is empty" (Dockerfile COPY *.md ./).
+    # The per-request timeout exceeds the server's own 55s LLM timeout so a
+    # slow model reports as a FAIL rather than a transport error.
+    try:
+        r = client.post(
+            "/assistant/ask",
+            json={"question": "What is a convertible?"},
+            timeout=90.0,
+        )
+        answer = r.json().get("answer", "") if r.status_code == 200 else ""
+        check(
+            "assistant-knows-a-convertible",
+            (
+                r.status_code == 200
+                and bool(answer.strip())
+                and "knowledge base is empty" not in answer
+                and "couldn't reach the language model" not in answer
+            ),
+            f"POST /assistant/ask -> {r.status_code}, answer={answer[:60]!r}",
+        )
+    except httpx.RequestError as exc:
+        check(
+            "assistant-knows-a-convertible",
+            False,
+            f"POST /assistant/ask -> transport error: {exc}",
+        )
 
     print()
     if FAILURES:
