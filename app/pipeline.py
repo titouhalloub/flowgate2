@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -89,6 +90,43 @@ def _backfill_deal_container(
         instrument.transaction_type = txn
 
 
+def _normalise_raw_text(text: str) -> str:
+    """Normalise raw text so every downstream regex sees one canonical form.
+
+    Three real-world document quirks this handles:
+
+    1. Smart quotes. Curly apostrophes (U+2018 / U+2019) and curly double
+       quotes (U+201C / U+201D) break character classes tuned for straight
+       ASCII. Every name-capture regex in app/extraction.py uses a class
+       like [A-Za-z0-9 .,&"'-], which terminates on a curly apostrophe.
+       A name like "Reed's Inc." (curly) captured as "Reed" or as
+       "s Inc." depending on which pattern matched first.
+
+    2. LaTeX math delimiters. PDFs generated from LaTeX or Clerky templates
+       often carry literal \\( \\) \\[ \\] sequences in the extracted text
+       layer. These break every money regex because the $ that should
+       precede a number is not there. Replacing them with a space
+       preserves word boundaries.
+
+    3. Multiple consecutive spaces. Collapsed to a single space so window-
+       based matchers (the money helpers use fixed character windows) do
+       not miss a keyword that sits just past a run of whitespace.
+
+    Applied once, at the top of process_document. Every ingestion path
+    (paste-text, upload, OCR) converges here.
+    """
+    if not text:
+        return text
+    # Smart quotes -> straight ASCII
+    text = text.replace("\u2018", "'").replace("\u2019", "'")
+    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    # LaTeX math delimiters -> single space (preserves word boundaries)
+    text = re.sub(r"\\[\(\)\[\]]", " ", text)
+    # Collapse runs of spaces and tabs
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text
+
+
 def process_document(session: Session, instrument: Instrument,
                      gateway: ComplianceGateway, text: str,
                      filename: str = "document.txt",
@@ -98,6 +136,7 @@ def process_document(session: Session, instrument: Instrument,
     file_url: where the uploaded original was persisted (uploads/...).
     None keeps the historical "mem://" placeholder used by text submissions.
     """
+    text = _normalise_raw_text(text)
 
     def make_doc(doc_type, class_conf, extract_conf, source, status):
         return Document(

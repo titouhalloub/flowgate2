@@ -153,7 +153,15 @@ def _money_after(text: str, keyword_pattern: str, window: int = 80):
             # though their integer part has < 4 digits.
             if not _is_date_fragment(text, offset + mm.start(2), offset + mm.end(2)):
                 return float(mm.group(2).replace(",", "")), "USD"
-        for mm in re.finditer(_AMOUNT, segment):
+        # Bare-number fallback: same-line only. A bare number in the wider
+        # window often belongs to an adjacent field -- e.g. a "Purchase
+        # Amount" label whose value sits on the previous line, immediately
+        # followed by "Valuation Cap: 2,500,000" on the next. Restricting to
+        # the keyword's own line lets _money_before own the amount-before-
+        # label case instead of _money_after grabbing the wrong number.
+        line_end = segment.find("\n")
+        line_segment = segment if line_end == -1 else segment[:line_end]
+        for mm in re.finditer(_AMOUNT, line_segment):
             # A bare number is only plausible money when properly
             # thousands-grouped ("5,000,000"); otherwise it could be an
             # IBAN, phone or building number.
@@ -184,6 +192,18 @@ def _money_before(text: str, keyword_pattern: str, window: int = 80):
                 candidates.append((mm.start(1), float(mm.group(1).replace(",", "")), mm.group(2).upper()[:3]))
         for mm in _DOLLAR_AMOUNT.finditer(segment):
             candidates.append((mm.start(2), float(mm.group(2).replace(",", "")), "USD"))
+        # Bare-number fallback: same-line as the keyword only (mirrors
+        # _money_after). The segment already ends at the keyword, so the
+        # line boundary is the nearest "\n" working backward from the end.
+        line_start = segment.rfind("\n") + 1  # 0 when no newline is present
+        line_segment = segment[line_start:]
+        for mm in re.finditer(_AMOUNT, line_segment):
+            if _is_grouped_amount(mm.group(1)):
+                candidates.append((
+                    line_start + mm.start(1),
+                    float(mm.group(1).replace(",", "")),
+                    None,
+                ))
         if candidates:
             candidates.sort(key=lambda x: -x[0])
             return candidates[0][1], candidates[0][2]
