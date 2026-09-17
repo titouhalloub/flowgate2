@@ -45,6 +45,9 @@ export default function App() {
 
   // State Stores
   const [lastPipelineResult, setLastPipelineResult] = useState<PipelineRunResult | null>(null);
+  // Single source of truth for which issuer every panel reads. Auto-switched
+  // when a document is processed; overridable from the cap table tab for demos.
+  const [currentIssuerName, setCurrentIssuerName] = useState('Flowgate Systems Inc.');
   const [capTableEvents, setCapTableEvents] = useState<CapTableEvent[]>(INITIAL_CAP_TABLE_EVENTS);
   // 409A context for the cap table (live API only; null in demo mode).
   const [latest409a, setLatest409a] = useState<LatestValuation | null>(null);
@@ -78,7 +81,7 @@ export default function App() {
         liveApi.listCapitalCalls(),
         liveApi.listProposals(),
         // Never rejects -- null when no valuation is on file / offline.
-        liveApi.getLatestValuation('Flowgate Systems Inc.'),
+        liveApi.getLatestValuation(currentIssuerName),
       ]);
       setInvestors(serverInvestors);
       setCapitalCalls(serverCalls);
@@ -87,7 +90,9 @@ export default function App() {
     } catch {
       // Backend unreachable (or sleeping Render instance) -- demo mode.
     }
-  }, []);
+    // Re-hydrate when the viewed issuer changes (409A is issuer-scoped); the
+    // mount-time useEffect depends on this callback's identity, so it re-runs.
+  }, [currentIssuerName]);
 
   // Hold the dashboard until the first hydration attempt settles, so its
   // mount-time useState copies contain live server data (or the demo seeds
@@ -136,12 +141,20 @@ export default function App() {
 
   // Derived Event-Sourced Cap Table
   const capTableSnapshot = useMemo(() => {
-    return computeCapTable(capTableEvents, 'Flowgate Systems Inc.');
-  }, [capTableEvents]);
+    return computeCapTable(capTableEvents, currentIssuerName);
+  }, [capTableEvents, currentIssuerName]);
 
   // Handler: Pipeline Run Completed
   const handlePipelineCompleted = (result: PipelineRunResult) => {
     setLastPipelineResult(result);
+    // When a document is processed for a different issuer, switch the whole
+    // view to that issuer. The pipeline's result carries the true, document-
+    // derived issuer name -- this is what makes the cap table, the 409A FMV,
+    // and the convertibles panel all point at the same company.
+    const incomingIssuer = result?.instrument?.issuer_name;
+    if (incomingIssuer && incomingIssuer !== currentIssuerName) {
+      setCurrentIssuerName(incomingIssuer);
+    }
     setLedgerEntries((prev) => [...result.ledger_entries, ...prev]);
 
     if (result.proposal_created) {
@@ -658,6 +671,7 @@ export default function App() {
                 </button>
               </div>
               <CapTableView
+                issuerName={currentIssuerName}
                 snapshot={capTableSnapshot}
                 events={capTableEvents}
                 proposals={proposals}
@@ -671,6 +685,7 @@ export default function App() {
                 onRequestRefresh={() => {
                   void refreshFromServer();
                 }}
+                onSwitchIssuer={(name) => setCurrentIssuerName(name)}
               />
             </div>
           )}

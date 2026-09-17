@@ -24,10 +24,6 @@ import {
   Lock,
 } from 'lucide-react';
 
-// Phase 3.7 -- issuer for the convertibles panel. Hardcoded to match the rest
-// of the demo path in App.tsx.
-// TODO: parameterize when multi-issuer support lands.
-const ISSUER_NAME = 'Acme Robotics Inc.';
 // Rendering helpers for the convertibles table.
 function formatMoney(amount: number, currency: string): string {
   const symbol = currency === 'USD' ? '$' : `${currency} `;
@@ -45,6 +41,8 @@ function formatIssuedDate(iso: string): string {
 }
 
 interface CapTableViewProps {
+  /** The issuer every panel in this view reads. Owned by App.tsx state. */
+  issuerName: string;
   snapshot: CapTableSnapshot;
   events: CapTableEvent[];
   proposals: CapTableProposal[];
@@ -63,9 +61,12 @@ interface CapTableViewProps {
   onError?: (msg: string) => void;
   /** Parent re-fetch hook, called after a priced round is committed. */
   onRequestRefresh?: () => void;
+  /** Manual demo override: switch the viewed issuer (App state). */
+  onSwitchIssuer?: (issuerName: string) => void;
 }
 
 export const CapTableView: React.FC<CapTableViewProps> = ({
+  issuerName,
   snapshot,
   events,
   proposals,
@@ -77,6 +78,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   onLinkInvestor,
   onError,
   onRequestRefresh,
+  onSwitchIssuer,
 }) => {
   const [showEventModal, setShowEventModal] = useState(false);
   const [reviewerName, setReviewerName] = useState('Sarah Jenkins (Legal VP)');
@@ -123,7 +125,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
       setConvertiblesLoading(true);
       try {
         const rows = await listConvertibles(
-          ISSUER_NAME,
+          issuerName,
           statusFilter === 'outstanding' ? 'outstanding' : undefined,
         );
         if (!cancelled) setConvertibles(rows);
@@ -149,7 +151,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
     // it keeps the fetch from re-firing on every parent render. refreshKey
     // re-fires the fetch after a priced-round commit converts SAFEs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, refreshKey]);
+  }, [issuerName, statusFilter, refreshKey]);
 
   const handlePricedRoundCommitted = () => {
     setIsModalOpen(false);
@@ -410,6 +412,23 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          Viewing issuer
+        </label>
+        <input
+          type="text"
+          defaultValue={issuerName}
+          onBlur={(e) => {
+            const next = e.target.value.trim();
+            if (next && next !== issuerName) {
+              onSwitchIssuer?.(next);
+            }
+          }}
+          className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 font-mono outline-none focus:border-[#7048E8] w-64"
+        />
       </div>
 
       {/* Grid: Stakeholder Positions & Cap Table Proposals */}
@@ -1131,7 +1150,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
           only "Commit round" writes, and the modal reports the outcome. */}
       <PricedRoundModal
         isOpen={isModalOpen}
-        issuerName={ISSUER_NAME}
+        issuerName={issuerName}
         onClose={() => setIsModalOpen(false)}
         onCommitted={handlePricedRoundCommitted}
         onError={(msg) => onError?.(msg)}
