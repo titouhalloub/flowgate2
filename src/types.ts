@@ -318,3 +318,8 @@ export interface PricedRound {
   total_conversion_shares: number;
   conversions: PricedRoundConversion[];
 }
+
+export interface AssistantAnswer {
+  answer: string;
+  sources: string[];
+}

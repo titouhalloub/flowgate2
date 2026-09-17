@@ -7,6 +7,7 @@ import { CapitalCallsView } from './components/CapitalCallsView';
 import { InvestorPortfolioView } from './components/InvestorPortfolioView';
 import { AuditLedgerView } from './components/AuditLedgerView';
 import { DocsView } from './components/DocsView';
+import { AssistantPanel } from './components/AssistantPanel';
 import {
   CapTableEvent,
   CapTableProposal,
@@ -799,6 +800,7 @@ export default function App() {
             </div>
           )}
         </main>
+        <AssistantPanel issuerName={currentIssuerName} />
       </div>
     </div>
   );

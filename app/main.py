@@ -27,6 +27,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api_schemas import (
+    AssistantAskRequest,
+    AssistantAskResponse,
     CapitalCallCreate,
     CapitalCallOut,
     CapitalCallReviewRequest,
@@ -71,6 +73,7 @@ from app.api_schemas import (
     ValuationOut,
     LatestValuationOut,
 )
+from app.assistant import ask_assistant
 from app.captable import (
     CapTableError,
     ConversionError,
@@ -1534,6 +1537,30 @@ def list_priced_rounds(
         ).scalars().all()
     )
     return [_priced_round_out(r, session) for r in rounds]
+
+
+@app.post(
+    "/assistant/ask",
+    response_model=AssistantAskResponse,
+    responses={
+        401: {"model": ErrorOut},
+        400: {"model": ErrorOut},
+    },
+)
+def assistant_ask(
+    payload: AssistantAskRequest,
+    _: str = Depends(require_api_key),
+) -> AssistantAskResponse:
+    """Read-only help assistant. Never writes. Never claims compliance.
+
+    The question is answered from the repo's markdown plans, loaded once
+    and cached. Issuer context is accepted but unused in v1.
+    """
+    result = ask_assistant(payload.question, payload.issuer_name)
+    return AssistantAskResponse(
+        answer=result["answer"],
+        sources=result["sources"],
+    )
 
 
 # ---------------------------------------------------------------------------

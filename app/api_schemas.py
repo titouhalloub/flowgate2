@@ -606,3 +606,13 @@ class TransferEvaluationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AssistantAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    issuer_name: str | None = None
+
+
+class AssistantAskResponse(BaseModel):
+    answer: str
+    sources: list[str] = []
+
+

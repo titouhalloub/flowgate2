@@ -1,4 +1,5 @@
 import {
+  AssistantAnswer,
   CapTableEvent,
   CapTableProposal,
   CapitalCall,
@@ -529,6 +530,19 @@ export async function createPricedRound(payload: {
   return request('/priced-rounds', {
     method: 'POST',
     body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// POST /assistant/ask -- read-only help assistant. Grounded in the repo's
+// markdown plans; the backend never writes and never claims compliance.
+export async function askAssistant(
+  question: string,
+  issuerName?: string,
+): Promise<AssistantAnswer> {
+  return request('/assistant/ask', {
+    method: 'POST',
+    body: JSON.stringify({ question, issuer_name: issuerName ?? null }),
     headers: { 'Content-Type': 'application/json' },
   });
 }
