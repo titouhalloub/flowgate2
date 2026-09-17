@@ -39,6 +39,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY migrations ./migrations
 
+# Repo-root markdown: the assistant's knowledge base. _load_knowledge_base()
+# resolves _REPO_ROOT as the parent of app/, i.e. /app, and reads these files
+# by name at request time -- without them the panel answers "knowledge base
+# is empty".
+COPY *.md ./
+
 # Built React assets from the frontend stage
 COPY --from=frontend /build/dist ./dist
 
