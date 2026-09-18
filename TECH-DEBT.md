@@ -14,3 +14,13 @@ system prompt. That's ~$0.10/question on Sonnet. At pilot scale, consider:
 relevant sections, or (c) a two-tier approach — a small knowledge base for
 common questions, retrieval for the long tail. None of this is urgent for
 a demo, but it caps unit economics at pilot scale.
+
+## Frontend/backend severity naming mismatch
+
+Frontend ComplianceFinding (src/types.ts) uses severity:
+'blocking' | 'review' | 'advisory'. Backend RuleSeverity
+(app/models/enums.py) uses 'blocking' | 'review' | 'info'. The third
+member differs. Currently harmless because InstrumentOut has no
+compliance_findings field and the frontend panel renders client-computed
+stub data. Must be reconciled before the backend's real findings flow to
+the UI.

@@ -19,7 +19,6 @@ outcome, and is persisted to the append-only ledger.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
@@ -29,17 +28,12 @@ from app.models.enums import (
     ComplianceMode,
     DocumentType,
     LedgerEntryType,
+    RuleSeverity,
     ShariahContractType,
     ShariahReviewStatus,
 )
 from app.models.orm import Document, Instrument, LedgerEntry
 from app.telemetry import get_tracer
-
-
-class RuleSeverity(str, Enum):
-    BLOCKING = "blocking"      # clear violation -> auto-flag noncompliant
-    REVIEW = "review"          # needs human eyes, not an auto-pass
-    INFO = "info"              # recorded for the human reviewer
 
 
 @dataclass

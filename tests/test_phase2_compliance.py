@@ -1,20 +1,22 @@
 """Phase 2 — compliance-as-configuration: one gateway, two rule sets."""
 
 import pytest
+from datetime import date
 
 from app.compliance import (
     ComplianceGateway,
     RULE_SETS,
-    RuleSeverity,
     run_gateway_with_ledger,
 )
 from app.models.enums import (
     ComplianceMode,
     DocumentType,
+    RuleSeverity,
     ShariahContractType,
     ShariahReviewStatus,
     TransactionType,
 )
+from app.models.orm import ComplianceRule
 from app.telemetry import clear_traces, find_trace
 from tests.conftest import make_document, make_instrument
 
@@ -130,6 +132,137 @@ def test_gateway_emits_trace(db):
     trace = find_trace("compliance.gateway")
     assert trace is not None, "gateway decision must emit a telemetry trace"
     assert trace.metadata["rule_set"] == "islamic"
+    session.close()
+
+
+def test_compliance_rule_severity_values(db):
+    """RuleSeverity must carry exactly the three documented values."""
+    session = db[0]()
+    assert RuleSeverity.BLOCKING.value == "blocking"
+    assert RuleSeverity.REVIEW.value == "review"
+    assert RuleSeverity.INFO.value == "info"
+    assert len(list(RuleSeverity)) == 3
+    session.close()
+
+
+def test_compliance_rule_can_be_persisted(db):
+    """A ComplianceRule can be constructed, persisted and read back."""
+    session = db[0]()
+    rule = ComplianceRule(
+        id="rule-001",
+        package_name="flowgate.core",
+        rule_name="max-investment",
+        version=1,
+        effective_from=date(2026, 1, 1),
+        label="Maximum investment per deal",
+        description="No single deal may exceed the configured cap.",
+        finding_code="CFG_MAX_INVESTMENT",
+        severity=RuleSeverity.BLOCKING,
+        message="Investment exceeds maximum allowed.",
+        condition={},
+        created_by="system",
+    )
+    session.add(rule)
+    session.flush()
+    session.expunge(rule)
+    fetched = session.get(ComplianceRule, "rule-001")
+    assert fetched is not None
+    assert fetched.package_name == "flowgate.core"
+    assert fetched.rule_name == "max-investment"
+    assert fetched.severity == RuleSeverity.BLOCKING
+    assert fetched.active is True
+    assert fetched.version == 1
+    assert fetched.created_by == "system"
+    session.close()
+
+
+def test_compliance_rule_json_fields(db):
+    """applies_to and condition are JSON columns with the expected defaults."""
+    session = db[0]()
+    rule = ComplianceRule(
+        id="rule-002",
+        package_name="flowgate.core",
+        rule_name="type-restricted",
+        version=1,
+        effective_from=date(2026, 1, 1),
+        label="Type restricted rule",
+        finding_code="CFG_TYPE_OK",
+        severity=RuleSeverity.INFO,
+        message="Type check passed.",
+        applies_to=["equity", "sukuk"],
+        condition={"and": [{"==": ["$var", "allowed"]}]},
+        created_by="system",
+    )
+    session.add(rule)
+    session.flush()
+    fetched = session.get(ComplianceRule, "rule-002")
+    assert fetched.applies_to == ["equity", "sukuk"]
+    assert fetched.condition == {"and": [{"==": ["$var", "allowed"]}]}
+    # Default values when not supplied.
+    default_rule = ComplianceRule(
+        id="rule-003",
+        package_name="flowgate.core",
+        rule_name="default-rule",
+        version=1,
+        effective_from=date(2026, 1, 1),
+        label="Default rule",
+        finding_code="CFG_DEFAULT",
+        severity=RuleSeverity.INFO,
+        message="Default rule.",
+        created_by="system",
+    )
+    session.add(default_rule)
+    session.flush()
+    fetched_default = session.get(ComplianceRule, "rule-003")
+    assert fetched_default.applies_to == []
+    assert fetched_default.condition == {}
+    session.close()
+
+
+def test_compliance_rule_version_and_effective_dates(db):
+    """Version and effective-date fields persist without truncating history."""
+    session = db[0]()
+    original = ComplianceRule(
+        id="rule-v1",
+        package_name="flowgate.core",
+        rule_name="threshold",
+        version=1,
+        effective_from=date(2026, 1, 1),
+        effective_to=date(2026, 5, 31),
+        label="Threshold v1",
+        finding_code="CFG_THRESHOLD",
+        severity=RuleSeverity.REVIEW,
+        message="Original threshold.",
+        active=True,
+        created_by="system",
+    )
+    session.add(original)
+    session.flush()
+
+    # A later version gets its own effective_from; the previous row keeps
+    # its effective_to so history is not truncated.
+    replacement = ComplianceRule(
+        id="rule-v2",
+        package_name="flowgate.core",
+        rule_name="threshold",
+        version=2,
+        effective_from=date(2026, 6, 1),
+        effective_to=None,
+        label="Threshold v2",
+        finding_code="CFG_THRESHOLD",
+        severity=RuleSeverity.BLOCKING,
+        message="Updated threshold.",
+        active=True,
+        created_by="system",
+    )
+    session.add(replacement)
+    session.flush()
+    session.expunge(original)
+    fetched = session.get(ComplianceRule, "rule-v1")
+    assert fetched.version == 1
+    assert fetched.effective_from == date(2026, 1, 1)
+    assert fetched.effective_to == date(2026, 5, 31)
+    assert fetched.active is True
     session.close()
 
 

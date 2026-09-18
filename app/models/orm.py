@@ -51,6 +51,7 @@ from app.models.enums import (
     LedgerEntryType,
     ProposalStatus,
     ProposalType,
+    RuleSeverity,
     SecurityType,
     TransactionType,
     ShariahContractType,
@@ -630,6 +631,83 @@ class CapTableProposal(Base):
         return (
             f"<CapTableProposal doc={self.document_id!r} "
             f"status={self.status.value}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 -- compliance-as-configuration rules. See
+# AI-ASSISTANT-AND-COMPLIANCE-PLAN.md (Part 2, item 2.1). One row = one
+# (predicate, outcome) pair. Rules are versioned and deactivated, never
+# deleted, so a past evaluation stays interpretable.
+# ---------------------------------------------------------------------------
+
+
+class ComplianceRule(Base):
+    """A single compliance predicate.
+
+    One row = one (predicate, outcome) pair. Rules with multiple
+    branches in the legacy Python form (e.g. REVIEW if missing,
+    BLOCKING if out of band) become two rows, one per outcome.
+
+    Versioned by (package_name, rule_name, effective_from). Editing a
+    rule inserts a new row with a later effective_from and sets the
+    previous row's effective_to to the day before. Rules are
+    deactivated (active=False) when a package is retired; never
+    deleted, so evaluation history stays interpretable.
+
+    ``condition`` is a JSON Logic expression evaluated against a
+    context object that exposes the instrument and its documents.
+    Empty dict {} means "always true" -- used for INFO rules that
+    emit unconditionally.
+
+    ``applies_to`` is a list of TransactionType string values. Empty
+    list means "all instrument types". The engine filters by this
+    before evaluating.
+    """
+
+    __tablename__ = "compliance_rules"
+    __table_args__ = (
+        Index("ix_compliance_rules_package_active", "package_name", "active"),
+        Index("ix_compliance_rules_effective", "effective_from"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    package_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Identifier carried over from the legacy (name, callable) tuple form.
+    rule_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date, default=None)
+
+    # Human-readable label, distinct from the stable rule_name above.
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # TransactionType values this rule applies to. Empty = all types.
+    applies_to: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    # The RuleFinding this rule emits when its condition is true. The
+    # severity/message pair lives here, not inside the callable -- so a
+    # customer edits wording and severity without a code change.
+    finding_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[RuleSeverity] = mapped_column(
+        Enum(RuleSeverity, native_enum=False, length=16),
+        nullable=False,
+    )
+    message: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    # JSON Logic. {} == always true.
+    condition: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    active: Mapped[bool] = mapped_column(default=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<ComplianceRule package={self.package_name!r} "
+            f"name={self.rule_name!r} v{self.version} "
+            f"severity={self.severity.value} active={self.active}>"
         )
 
 

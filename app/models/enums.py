@@ -7,6 +7,21 @@ SQLAlchemy ORM layer and the Pydantic validation layer.
 from enum import Enum
 
 
+class RuleSeverity(str, Enum):
+    """Severity of a compliance finding.
+
+    BLOCKING -- clear violation; auto-flags noncompliant.
+    REVIEW   -- needs human eyes; does not auto-pass.
+    INFO     -- recorded for the human reviewer; no decision impact.
+
+    Persisted in compliance_rules.severity -- adding a new member
+    requires a migration that considers existing rows.
+    """
+    BLOCKING = "blocking"
+    REVIEW = "review"
+    INFO = "info"
+
+
 class ComplianceMode(str, Enum):
     TRADITIONAL = "traditional"
     ISLAMIC = "islamic"
