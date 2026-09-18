@@ -5,6 +5,8 @@ whose transaction_type is in the list. Rules with an empty applies_to
 run for all instrument types (current behavior).
 """
 
+from dataclasses import replace
+
 from app.compliance import ComplianceGateway, RULE_SETS
 from app.models.enums import (
     ComplianceMode,
@@ -18,11 +20,11 @@ from tests.conftest import make_document, make_instrument
 def _gateway_with_scoped_rule():
     """A gateway whose traditional set carries one loan-scoped rule."""
     loan_scoped = []
-    for name, fn, applies in RULE_SETS["traditional"]:
-        if name == "kyc_aml_present":
-            loan_scoped.append((name, fn, ["loan"]))
+    for rule in RULE_SETS["traditional"]:
+        if rule.name == "kyc_aml_present":
+            loan_scoped.append(replace(rule, applies_to=["loan"]))
         else:
-            loan_scoped.append((name, fn, applies))
+            loan_scoped.append(rule)
     return ComplianceGateway({
         "traditional": loan_scoped,
         "islamic": list(RULE_SETS["islamic"]),
@@ -123,12 +125,12 @@ def test_loader_propagates_applies_to_from_db_row(db):
     loaded = load_rule_sets(session)
     assert "traditional" in loaded
     entry = next(
-        (e for e in loaded["traditional"] if e[0] == "mode_info"),
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
         None,
     )
     assert entry is not None
-    assert entry[2] == ["loan"], (
-        f"loader dropped applies_to; got {entry[2]!r}"
+    assert entry.applies_to == ["loan"], (
+        f"loader dropped applies_to; got {entry.applies_to!r}"
     )
     session.close()
 
@@ -141,11 +143,11 @@ def test_loader_empty_applies_to_propagates_as_empty_list(db):
 
     loaded = load_rule_sets(session)
     entry = next(
-        (e for e in loaded["traditional"] if e[0] == "mode_info"),
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
         None,
     )
     assert entry is not None
-    assert entry[2] == []
+    assert entry.applies_to == []
     session.close()
 
 

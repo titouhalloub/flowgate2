@@ -41,7 +41,7 @@ def test_two_rows_same_rule_name_load_once(db):
     _seed_traditional(session)
     loaded = load_rule_sets(session)
     assert "traditional" in loaded
-    names = [entry[0] for entry in loaded["traditional"]]
+    names = [entry.name for entry in loaded["traditional"]]
     # interest_rate_sanity has two rows but must appear once
     assert names.count("interest_rate_sanity") == 1
     assert names.count("kyc_aml_present") == 1

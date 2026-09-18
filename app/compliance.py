@@ -123,13 +123,32 @@ def build_context(
     }
 
 
-# A rule is a pure function returning findings; configuration == the ordered
-# list of (name, rule) pairs, nothing more.
 Rule = Callable[[RuleContext], list[RuleFinding]]
-# (name, callable, applies_to). applies_to is a list of
-# TransactionType string values this rule applies to. Empty list
-# means "all instrument types" -- current behavior preserved.
-NamedRule = tuple[str, Rule, list[str]]
+
+@dataclass(frozen=True)
+class LoadedRule:
+    """A single compliance rule as the loader hands it to the engine.
+
+    Replaces the former (name, callable, applies_to) tuple. The
+    dataclass is the transition shape: it carries both the callable
+    (Phase 2.4 path, still authoritative) and the condition dict
+    (Phase 2.5 path, currently unused by the engine). Phase 2.5d
+    makes condition authoritative; Phase 2.5e deletes the callable
+    field and the constants that populate it.
+
+    Fields:
+        name: stable identifier, matches ComplianceRule.rule_name.
+        callable: the Python function that decides which finding to
+            emit. Will be Optional[Rule] in 2.5e.
+        applies_to: TransactionType string values this rule applies
+            to. Empty list means "all instrument types".
+        condition: JSON Logic expression evaluated by the engine in
+            2.5d. Empty dict means "no condition" (defer to callable).
+    """
+    name: str
+    callable: Rule
+    applies_to: list[str]
+    condition: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -344,27 +363,59 @@ def shariah_no_speculation(ctx: RuleContext) -> list[RuleFinding]:
 # ---------------------------------------------------------------------------
 
 
-TRADITIONAL_RULES: list[NamedRule] = [
-    ("kyc_aml_present", traditional_kyc_aml_present, []),
-    ("interest_rate_sanity", traditional_interest_sanity, []),
-    ("mode_info", traditional_no_license_issue, []),
+TRADITIONAL_RULES: list[LoadedRule] = [
+    LoadedRule(
+        name="kyc_aml_present",
+        callable=traditional_kyc_aml_present,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="interest_rate_sanity",
+        callable=traditional_interest_sanity,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="mode_info",
+        callable=traditional_no_license_issue,
+        applies_to=[],
+    ),
 ]
 
-ISLAMIC_RULES: list[NamedRule] = [
-    ("contract_type_declared", shariah_contract_type_declared, []),
-    ("asset_backing", shariah_asset_backing, []),
-    ("no_fixed_interest", shariah_no_fixed_interest, []),
-    ("fatwa_reference", shariah_fatwa_reference, []),
-    ("no_speculation", shariah_no_speculation, []),
+ISLAMIC_RULES: list[LoadedRule] = [
+    LoadedRule(
+        name="contract_type_declared",
+        callable=shariah_contract_type_declared,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="asset_backing",
+        callable=shariah_asset_backing,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="no_fixed_interest",
+        callable=shariah_no_fixed_interest,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="fatwa_reference",
+        callable=shariah_fatwa_reference,
+        applies_to=[],
+    ),
+    LoadedRule(
+        name="no_speculation",
+        callable=shariah_no_speculation,
+        applies_to=[],
+    ),
 ]
 
-RULE_SETS: dict[str, list[NamedRule]] = {
+RULE_SETS: dict[str, list[LoadedRule]] = {
     ComplianceMode.TRADITIONAL.value: TRADITIONAL_RULES,
     ComplianceMode.ISLAMIC.value: ISLAMIC_RULES,
 }
 
 
-def load_rule_sets(session) -> dict[str, list[NamedRule]]:
+def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
     """Load rule sets from the database, falling back to the module
     constants when the table is empty.
 
@@ -405,8 +456,8 @@ def load_rule_sets(session) -> dict[str, list[NamedRule]]:
     # phase).
     legacy_by_name: dict[str, Callable[[RuleContext], list[RuleFinding]]] = {}
     for rules in RULE_SETS.values():
-        for name, fn, _applies_to in rules:
-            legacy_by_name[name] = fn
+        for rule in rules:
+            legacy_by_name[rule.name] = rule.callable
 
     # Multiple rows can share a rule_name (one per finding the rule can
     # emit). The callable is the same for all of them, and it decides
@@ -415,20 +466,33 @@ def load_rule_sets(session) -> dict[str, list[NamedRule]]:
     # Group rows by (package_name, rule_name), deduplicating.
     # Rows sharing a rule_name have identical applies_to lists -- the
     # first one seen wins; the seed guarantees consistency.
-    grouped: dict[str, list[tuple[str, list[str]]]] = {}
+    # Multiple rows can share a rule_name (one per finding the rule can
+    # emit). The callable is the same for all of them, and it decides
+    # internally which finding to produce. Dedup by rule_name so each
+    # callable runs exactly once per evaluation. The first row's
+    # condition and applies_to are used -- the seed guarantees
+    # consistency across rows that share a name.
+    grouped: dict[str, dict[str, dict]] = {}
     for row in rows:
-        bucket = grouped.setdefault(row.package_name, [])
-        if not any(n == row.rule_name for n, _ in bucket):
-            applies = list(row.applies_to) if row.applies_to else []
-            bucket.append((row.rule_name, applies))
+        bucket = grouped.setdefault(row.package_name, {})
+        if row.rule_name not in bucket:
+            bucket[row.rule_name] = {
+                "applies_to": list(row.applies_to) if row.applies_to else [],
+                "condition": dict(row.condition) if row.condition else {},
+            }
 
-    result: dict[str, list[NamedRule]] = {}
-    for package, entries in grouped.items():
-        rules: list[NamedRule] = []
-        for name, applies_to in entries:
+    result: dict[str, list[LoadedRule]] = {}
+    for package, by_name in grouped.items():
+        rules: list[LoadedRule] = []
+        for name, meta in by_name.items():
             fn = legacy_by_name.get(name)
             if fn is not None:
-                rules.append((name, fn, applies_to))
+                rules.append(LoadedRule(
+                    name=name,
+                    callable=fn,
+                    applies_to=meta["applies_to"],
+                    condition=meta["condition"],
+                ))
         if rules:
             result[package] = rules
     return result
@@ -469,10 +533,10 @@ class ComplianceGateway:
         tt = instrument.transaction_type
         tt_value = tt.value if hasattr(tt, "value") else tt
 
-        for _name, rule, applies_to in rules:
-            if applies_to and tt_value not in applies_to:
+        for rule in rules:
+            if rule.applies_to and tt_value not in rule.applies_to:
                 continue
-            findings.extend(rule(ctx))
+            findings.extend(rule.callable(ctx))
 
         blocking = any(f.severity == RuleSeverity.BLOCKING for f in findings)
 
