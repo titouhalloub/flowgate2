@@ -294,6 +294,66 @@ RULE_SETS: dict[str, list[NamedRule]] = {
 }
 
 
+def load_rule_sets(session) -> dict[str, list[NamedRule]]:
+    """Load rule sets from the database, falling back to the module
+    constants when the table is empty.
+
+    The database is the source of truth once populated: which rules
+    run for a package is decided by the presence of active rows for
+    that package. The callable that a row wraps is looked up by
+    rule_name from the module constants -- Phase 2.5 replaces this
+    with JSON Logic evaluation.
+
+    Args:
+        session: SQLAlchemy Session. If None, returns the constants
+            directly (used by tests that construct the gateway
+            without a database).
+
+    Returns:
+        dict[str, list[NamedRule]] -- same shape as RULE_SETS, keyed
+        by package name (matching ComplianceMode.value for the two
+        built-in packages).
+    """
+    if session is None:
+        return RULE_SETS
+
+    from app.models.orm import ComplianceRule
+
+    rows = (
+        session.query(ComplianceRule)
+        .filter(ComplianceRule.active.is_(True))
+        .all()
+    )
+    if not rows:
+        # Table empty: fall back to the compiled-in rule sets. This is
+        # the state until Phase 2.3 seeds the table.
+        return RULE_SETS
+
+    # Build a lookup of every callable the module knows about, keyed by
+    # its rule_name. A row whose rule_name has no matching callable is
+    # skipped (and will be logged once a logger is added in a later
+    # phase).
+    legacy_by_name: dict[str, Callable[[RuleContext], list[RuleFinding]]] = {}
+    for rules in RULE_SETS.values():
+        for name, fn in rules:
+            legacy_by_name[name] = fn
+
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(row.package_name, []).append(row.rule_name)
+
+    result: dict[str, list[NamedRule]] = {}
+    for package, names in grouped.items():
+        rules: list[NamedRule] = []
+        for name in names:
+            fn = legacy_by_name.get(name)
+            if fn is not None:
+                rules.append((name, fn))
+        if rules:
+            result[package] = rules
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Gateway
 # ---------------------------------------------------------------------------

@@ -81,7 +81,7 @@ from app.captable import (
     compute_cap_table,
     compute_conversions,
 )
-from app.compliance import ComplianceGateway
+from app.compliance import ComplianceGateway, load_rule_sets
 from app.config import settings
 from app.db import get_session, init_db
 from app.models.enums import (
@@ -348,7 +348,7 @@ def submit_document(
         raise HTTPException(status_code=404, detail=f"Instrument {instrument_id!r} not found")
 
     result = process_document(
-        session, instrument, ComplianceGateway(), payload.text, filename=payload.filename
+        session, instrument, ComplianceGateway(load_rule_sets(session)), payload.text, filename=payload.filename
     )
     session.refresh(instrument)
     _maybe_create_convertible_proposal(session, result.document, instrument)
@@ -418,7 +418,7 @@ def upload_document(
         stored_url = None  # storage failure must not block ingestion
 
     result = process_document(
-        session, instrument, ComplianceGateway(), text, filename=file.filename or "upload",
+        session, instrument, ComplianceGateway(load_rule_sets(session)), text, filename=file.filename or "upload",
         file_url=stored_url,
     )
     session.refresh(instrument)
