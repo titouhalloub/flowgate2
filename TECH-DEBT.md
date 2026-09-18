@@ -24,3 +24,11 @@ member differs. Currently harmless because InstrumentOut has no
 compliance_findings field and the frontend panel renders client-computed
 stub data. Must be reconciled before the backend's real findings flow to
 the UI.
+
+## requirements.txt and pyproject.toml are out of sync
+
+requirements.txt lists psycopg2-binary and openai; pyproject.toml
+omits both. Production uses requirements.txt (Dockerfile). Local
+dev uses the venv, which was built from requirements.txt. The two
+files should be reconciled -- pyproject.toml is the canonical
+source per PEP 621.
