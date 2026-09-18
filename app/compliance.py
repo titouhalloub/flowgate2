@@ -34,6 +34,7 @@ from app.models.enums import (
 )
 from app.models.orm import Document, Instrument, LedgerEntry
 from app.telemetry import get_tracer
+from app.json_logic import evaluate as eval_json_logic
 
 
 @dataclass
@@ -530,12 +531,28 @@ class ComplianceGateway:
         ctx = RuleContext(instrument=instrument, documents=documents)
         findings: list[RuleFinding] = []
 
+        # Condition gate (Phase 2.5d). When a LoadedRule carries a
+        # non-empty condition, evaluate it against a JSON Logic context
+        # derived from the instrument and documents. If it returns
+        # False, the rule is skipped -- its callable does not run. An
+        # empty condition means no gate (the callable is authoritative,
+        # matching pre-2.5d behavior).
+        #
+        # The context is built lazily so engines with no gated rules
+        # pay nothing.
+        json_context: dict | None = None
+
         tt = instrument.transaction_type
         tt_value = tt.value if hasattr(tt, "value") else tt
 
         for rule in rules:
             if rule.applies_to and tt_value not in rule.applies_to:
                 continue
+            if rule.condition:
+                if json_context is None:
+                    json_context = build_context(instrument, documents)
+                if not eval_json_logic(rule.condition, json_context):
+                    continue
             findings.extend(rule.callable(ctx))
 
         blocking = any(f.severity == RuleSeverity.BLOCKING for f in findings)
