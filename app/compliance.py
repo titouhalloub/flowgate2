@@ -56,6 +56,73 @@ class RuleContext:
             self.documents_by_type.setdefault(doc.document_type, []).append(doc)
 
 
+def build_context(
+    instrument: Instrument,
+    documents: Sequence[Document],
+) -> dict:
+    """Serialize (instrument, documents) into the plain dict that
+    the JSON Logic evaluator consumes.
+
+    Field selection follows the diagnostic: rules read exactly five
+    instrument attributes, four type_specific_data keys, and the
+    document types in the batch. Nothing else is exposed. Keeping
+    the surface minimal makes the JSON Logic expressions easy to
+    audit and stops a misconfigured condition from reading state it
+    was never meant to touch.
+
+    Enum values are serialized to their string form so conditions
+    can compare against literals like "loan" or "sukuk" instead of
+    Python enum members.
+    """
+    tsd = instrument.type_specific_data or {}
+
+    # Serialize only the four keys any current rule reads. Adding a
+    # key here is a deliberate act; anything else stays opaque.
+    type_specific_data = {
+        k: tsd.get(k)
+        for k in (
+            "interest_rate",
+            "fixed_coupon",
+            "profit_rate",
+            "ijara_rental_rate",
+        )
+    }
+
+    shariah_contract_type = instrument.shariah_contract_type
+    if shariah_contract_type is not None and hasattr(
+        shariah_contract_type, "value"
+    ):
+        shariah_contract_type = shariah_contract_type.value
+
+    compliance_mode = instrument.compliance_mode
+    if hasattr(compliance_mode, "value"):
+        compliance_mode = compliance_mode.value
+
+    transaction_type = instrument.transaction_type
+    if hasattr(transaction_type, "value"):
+        transaction_type = transaction_type.value
+
+    documents_by_type: dict[str, list[dict]] = {}
+    for doc in documents:
+        doc_type = doc.document_type
+        key = doc_type.value if hasattr(doc_type, "value") else doc_type
+        documents_by_type.setdefault(key, []).append({"id": doc.id})
+
+    return {
+        "instrument": {
+            "transaction_type": transaction_type,
+            "compliance_mode": compliance_mode,
+            "shariah_contract_type": shariah_contract_type,
+            "underlying_asset_id": instrument.underlying_asset_id,
+            "underlying_asset_description": (
+                instrument.underlying_asset_description
+            ),
+            "type_specific_data": type_specific_data,
+        },
+        "documents_by_type": documents_by_type,
+    }
+
+
 # A rule is a pure function returning findings; configuration == the ordered
 # list of (name, rule) pairs, nothing more.
 Rule = Callable[[RuleContext], list[RuleFinding]]

@@ -20,7 +20,7 @@ Supported operators:
   and or !    boolean logic; and/or are variadic, ! is unary
   in          membership test: {"in": [needle, haystack]}
   if          ternary: {"if": [cond, then]} or [cond, then, else]
-  empty       true if the argument is an empty list, dict, or string
+  empty       true if the argument is None, or an empty list, dict, or string
   truthy      Python truthiness of the argument
   in_range    inclusive bounds: {"in_range": [x, lo, hi]}
 """
@@ -56,10 +56,15 @@ def _resolve_var(context: Any, path: Any) -> Any:
 
 
 def _is_empty(value: Any) -> bool:
-    """True for empty list, dict, or string. False for None, numbers,
-    booleans, and non-empty containers."""
+    """True for None, empty list, empty dict, or empty string.
+
+    None is treated as empty because the compliance rules use this to
+    mean "the field is absent or has no values" -- e.g. no KYC doc
+    attached, no underlying asset declared. False for numbers,
+    booleans, and non-empty containers.
+    """
     if value is None:
-        return False
+        return True
     if isinstance(value, (list, dict, str, tuple)):
         return len(value) == 0
     return False

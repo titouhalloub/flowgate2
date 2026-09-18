@@ -73,7 +73,7 @@ def test_empty_operator():
     assert evaluate({"empty": {"var": "b"}}, ctx) is False
     assert evaluate({"empty": {"var": "c"}}, ctx) is True
     assert evaluate({"empty": {"var": "d"}}, ctx) is False
-    assert evaluate({"empty": {"var": "e"}}, ctx) is False
+    assert evaluate({"empty": {"var": "e"}}, ctx) is True
 
 
 def test_truthy_operator():
