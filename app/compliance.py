@@ -59,7 +59,10 @@ class RuleContext:
 # A rule is a pure function returning findings; configuration == the ordered
 # list of (name, rule) pairs, nothing more.
 Rule = Callable[[RuleContext], list[RuleFinding]]
-NamedRule = tuple[str, Rule]
+# (name, callable, applies_to). applies_to is a list of
+# TransactionType string values this rule applies to. Empty list
+# means "all instrument types" -- current behavior preserved.
+NamedRule = tuple[str, Rule, list[str]]
 
 
 @dataclass
@@ -275,17 +278,17 @@ def shariah_no_speculation(ctx: RuleContext) -> list[RuleFinding]:
 
 
 TRADITIONAL_RULES: list[NamedRule] = [
-    ("kyc_aml_present", traditional_kyc_aml_present),
-    ("interest_rate_sanity", traditional_interest_sanity),
-    ("mode_info", traditional_no_license_issue),
+    ("kyc_aml_present", traditional_kyc_aml_present, []),
+    ("interest_rate_sanity", traditional_interest_sanity, []),
+    ("mode_info", traditional_no_license_issue, []),
 ]
 
 ISLAMIC_RULES: list[NamedRule] = [
-    ("contract_type_declared", shariah_contract_type_declared),
-    ("asset_backing", shariah_asset_backing),
-    ("no_fixed_interest", shariah_no_fixed_interest),
-    ("fatwa_reference", shariah_fatwa_reference),
-    ("no_speculation", shariah_no_speculation),
+    ("contract_type_declared", shariah_contract_type_declared, []),
+    ("asset_backing", shariah_asset_backing, []),
+    ("no_fixed_interest", shariah_no_fixed_interest, []),
+    ("fatwa_reference", shariah_fatwa_reference, []),
+    ("no_speculation", shariah_no_speculation, []),
 ]
 
 RULE_SETS: dict[str, list[NamedRule]] = {
@@ -335,26 +338,30 @@ def load_rule_sets(session) -> dict[str, list[NamedRule]]:
     # phase).
     legacy_by_name: dict[str, Callable[[RuleContext], list[RuleFinding]]] = {}
     for rules in RULE_SETS.values():
-        for name, fn in rules:
+        for name, fn, _applies_to in rules:
             legacy_by_name[name] = fn
 
     # Multiple rows can share a rule_name (one per finding the rule can
     # emit). The callable is the same for all of them, and it decides
     # internally which finding to produce from the instrument. Dedup by
     # name so each callable runs exactly once per evaluation.
-    grouped: dict[str, list[str]] = {}
+    # Group rows by (package_name, rule_name), deduplicating.
+    # Rows sharing a rule_name have identical applies_to lists -- the
+    # first one seen wins; the seed guarantees consistency.
+    grouped: dict[str, list[tuple[str, list[str]]]] = {}
     for row in rows:
         bucket = grouped.setdefault(row.package_name, [])
-        if row.rule_name not in bucket:
-            bucket.append(row.rule_name)
+        if not any(n == row.rule_name for n, _ in bucket):
+            applies = list(row.applies_to) if row.applies_to else []
+            bucket.append((row.rule_name, applies))
 
     result: dict[str, list[NamedRule]] = {}
-    for package, names in grouped.items():
+    for package, entries in grouped.items():
         rules: list[NamedRule] = []
-        for name in names:
+        for name, applies_to in entries:
             fn = legacy_by_name.get(name)
             if fn is not None:
-                rules.append((name, fn))
+                rules.append((name, fn, applies_to))
         if rules:
             result[package] = rules
     return result
@@ -391,7 +398,13 @@ class ComplianceGateway:
 
         ctx = RuleContext(instrument=instrument, documents=documents)
         findings: list[RuleFinding] = []
-        for _name, rule in rules:
+
+        tt = instrument.transaction_type
+        tt_value = tt.value if hasattr(tt, "value") else tt
+
+        for _name, rule, applies_to in rules:
+            if applies_to and tt_value not in applies_to:
+                continue
             findings.extend(rule(ctx))
 
         blocking = any(f.severity == RuleSeverity.BLOCKING for f in findings)

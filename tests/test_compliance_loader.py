@@ -52,7 +52,7 @@ def test_rule_missing_from_db_does_not_run(db):
 
     loaded = load_rule_sets(session)
     assert "traditional" in loaded
-    names = [name for name, _ in loaded["traditional"]]
+    names = [entry[0] for entry in loaded["traditional"]]  
     assert "interest_rate_sanity" in names
     assert "mode_info" in names
     assert "kyc_aml_present" not in names
