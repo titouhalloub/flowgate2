@@ -11,7 +11,6 @@ interpretable.
 
 import sqlalchemy as sa
 from alembic import op
-import sqlalchemy_utils  # noqa: F401 (for JSONType, etc.)
 
 # revision identifiers, used by Alembic.
 revision = 'a27cap000011'

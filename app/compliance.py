@@ -338,9 +338,15 @@ def load_rule_sets(session) -> dict[str, list[NamedRule]]:
         for name, fn in rules:
             legacy_by_name[name] = fn
 
+    # Multiple rows can share a rule_name (one per finding the rule can
+    # emit). The callable is the same for all of them, and it decides
+    # internally which finding to produce from the instrument. Dedup by
+    # name so each callable runs exactly once per evaluation.
     grouped: dict[str, list[str]] = {}
     for row in rows:
-        grouped.setdefault(row.package_name, []).append(row.rule_name)
+        bucket = grouped.setdefault(row.package_name, [])
+        if row.rule_name not in bucket:
+            bucket.append(row.rule_name)
 
     result: dict[str, list[NamedRule]] = {}
     for package, names in grouped.items():
