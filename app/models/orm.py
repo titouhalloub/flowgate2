@@ -691,7 +691,12 @@ class ComplianceRule(Base):
     # customer edits wording and severity without a code change.
     finding_code: Mapped[str] = mapped_column(String(64), nullable=False)
     severity: Mapped[RuleSeverity] = mapped_column(
-        Enum(RuleSeverity, native_enum=False, length=16),
+        Enum(
+            RuleSeverity,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
     )
     message: Mapped[str] = mapped_column(String(512), nullable=False)
