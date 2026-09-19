@@ -513,14 +513,22 @@ def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
             # The full rows list carries every sibling row's metadata
             # for Phase 2.5f's row-driven emission.
             first = row_metas[0]
-            # Row mode only when every row carries a real condition.
-            # If any sibling row still has {}, the rule is treated as
-            # unmigrated and falls back to callable mode. This lets a
-            # partial seed rollout degrade cleanly.
-            all_gated = all(
-                bool(r.get("condition")) for r in row_metas
+            # Row mode when every row for this rule_name carries a real
+            # (non-empty) condition. The presence of a condition is the
+            # migration marker: filling one in means the row is ready to
+            # emit its own finding. A rule_name with any ungated sibling
+            # falls back to callable mode, so a partial rollout degrades
+            # cleanly.
+            #
+            # Constants have no rows and stay in callable mode. Every
+            # DB row currently seeded by migration a27cap000012 has
+            # condition={}, so this change is a no-op until
+            # a27cap000013 fills them in.
+            all_gated = (
+                len(row_metas) > 0
+                and all(bool(r.get("condition")) for r in row_metas)
             )
-            mode = "row" if (all_gated and fn is None) else "callable"
+            mode = "row" if all_gated else "callable"
             rules.append(LoadedRule(
                 name=name,
                 callable=fn,
