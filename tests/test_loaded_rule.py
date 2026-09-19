@@ -275,3 +275,160 @@ def test_gate_context_false_for_non_matching_type():
         f.code == "TRAD_KYC_MISSING" for f in decision.findings
     )
 
+# -----------------------------------------------------------------
+# Phase 2.5e -- LoadedRule carries row metadata for later
+# row-driven emission. The engine is unchanged; the list is
+# populated and tested but not yet read.
+# -----------------------------------------------------------------
+
+
+def test_constant_rules_have_empty_rows():
+    """Constants carry a callable but no DB row metadata."""
+    for rules in RULE_SETS.values():
+        for rule in rules:
+            assert rule.callable is not None
+            assert rule.rows == []
+
+
+def test_loader_preserves_all_rows_for_shared_rule_name(db):
+    """A rule_name with two DB rows must produce a LoadedRule whose
+    rows list has both entries. This is the shape 2.5f needs."""
+    from datetime import date as _date
+
+    session = db[0]()
+    session.add(ComplianceRule(
+        id="rate-missing",
+        package_name="traditional",
+        rule_name="interest_rate_sanity",
+        version=1,
+        effective_from=_date(2026, 1, 1),
+        label="rate presence",
+        applies_to=[],
+        finding_code="TRAD_RATE_MISSING",
+        severity=RuleSeverity.REVIEW,
+        message="No interest_rate on record.",
+        condition={},
+        created_by="test",
+    ))
+    session.add(ComplianceRule(
+        id="rate-oob",
+        package_name="traditional",
+        rule_name="interest_rate_sanity",
+        version=1,
+        effective_from=_date(2026, 1, 1),
+        label="rate bounds",
+        applies_to=[],
+        finding_code="TRAD_RATE_OUT_OF_BAND",
+        severity=RuleSeverity.BLOCKING,
+        message="Interest rate outside acceptable band.",
+        condition={},
+        created_by="test",
+    ))
+    session.commit()
+
+    loaded = load_rule_sets(session)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "interest_rate_sanity"),
+        None,
+    )
+    assert entry is not None
+    assert len(entry.rows) == 2
+    codes = sorted(r["finding_code"] for r in entry.rows)
+    assert codes == ["TRAD_RATE_MISSING", "TRAD_RATE_OUT_OF_BAND"]
+    # Severity is preserved per row
+    by_code = {r["finding_code"]: r["severity"] for r in entry.rows}
+    assert by_code["TRAD_RATE_MISSING"] == RuleSeverity.REVIEW
+    assert by_code["TRAD_RATE_OUT_OF_BAND"] == RuleSeverity.BLOCKING
+    session.close()
+
+
+def test_loader_row_metadata_has_all_five_keys(db):
+    """Each row dict has exactly: applies_to, condition,
+    finding_code, severity, message_template."""
+    from datetime import date as _date
+
+    session = db[0]()
+    session.add(ComplianceRule(
+        id="shape-test",
+        package_name="traditional",
+        rule_name="mode_info",
+        version=1,
+        effective_from=_date(2026, 1, 1),
+        label="mode",
+        applies_to=["loan"],
+        finding_code="TRAD_MODE_INFO",
+        severity=RuleSeverity.INFO,
+        message="Mode message.",
+        condition={"==": [1, 1]},
+        created_by="test",
+    ))
+    session.commit()
+
+    loaded = load_rule_sets(session)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
+        None,
+    )
+    assert entry is not None
+    assert len(entry.rows) == 1
+    row = entry.rows[0]
+    assert set(row.keys()) == {
+        "applies_to", "condition", "finding_code",
+        "severity", "message_template",
+    }
+    assert row["applies_to"] == ["loan"]
+    assert row["condition"] == {"==": [1, 1]}
+    assert row["finding_code"] == "TRAD_MODE_INFO"
+    assert row["severity"] == RuleSeverity.INFO
+    assert row["message_template"] == "Mode message."
+    session.close()
+
+
+def test_loader_row_without_callable_loads_with_none(db):
+    """A row whose rule_name has no matching Python callable loads
+    with callable=None and rows populated. It is inert in 2.5e."""
+    from datetime import date as _date
+
+    session = db[0]()
+    session.add(ComplianceRule(
+        id="orphan",
+        package_name="traditional",
+        rule_name="no_such_python_rule",
+        version=1,
+        effective_from=_date(2026, 1, 1),
+        label="orphan",
+        applies_to=[],
+        finding_code="ORPHAN_CODE",
+        severity=RuleSeverity.INFO,
+        message="Orphan message.",
+        condition={"==": [1, 1]},
+        created_by="test",
+    ))
+    session.commit()
+
+    loaded = load_rule_sets(session)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "no_such_python_rule"),
+        None,
+    )
+    assert entry is not None
+    assert entry.callable is None
+    assert len(entry.rows) == 1
+    assert entry.rows[0]["finding_code"] == "ORPHAN_CODE"
+    session.close()
+
+
+def test_engine_behavior_unchanged_for_constants():
+    """Running the gateway on a clean instrument still produces the
+    same findings as before 2.5e. The rows list is not read."""
+    from app.models.enums import TransactionType
+
+    instr = make_instrument(
+        txn_type=TransactionType.LOAN,
+        mode=ComplianceMode.TRADITIONAL,
+        type_specific_data={"interest_rate": 0.06},
+    )
+    # No KYC -> the KYC rule fires
+    decision = ComplianceGateway().evaluate(instr, [])
+    assert any(f.code == "TRAD_KYC_MISSING" for f in decision.findings)
+

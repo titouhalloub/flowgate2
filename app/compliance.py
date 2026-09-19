@@ -130,26 +130,34 @@ Rule = Callable[[RuleContext], list[RuleFinding]]
 class LoadedRule:
     """A single compliance rule as the loader hands it to the engine.
 
-    Replaces the former (name, callable, applies_to) tuple. The
-    dataclass is the transition shape: it carries both the callable
-    (Phase 2.4 path, still authoritative) and the condition dict
-    (Phase 2.5 path, currently unused by the engine). Phase 2.5d
-    makes condition authoritative; Phase 2.5e deletes the callable
-    field and the constants that populate it.
+    The shape after Phase 2.5e. Two emission modes coexist during
+    the migration:
+
+    - Callable mode: `callable` is a Python function that inspects
+      the RuleContext and returns findings. Authoritative today for
+      every rule. Constants and every DB row whose rule_name has a
+      matching Python function use this path.
+    - Row mode: arrives in Phase 2.5f. The engine will iterate
+      `rows`, evaluate each row's condition, and emit findings from
+      the row's finding_code/severity/message.
 
     Fields:
         name: stable identifier, matches ComplianceRule.rule_name.
         callable: the Python function that decides which finding to
-            emit. Will be Optional[Rule] in 2.5e.
+            emit. Optional; None means row-driven emission.
         applies_to: TransactionType string values this rule applies
             to. Empty list means "all instrument types".
-        condition: JSON Logic expression evaluated by the engine in
-            2.5d. Empty dict means "no condition" (defer to callable).
+        condition: JSON Logic expression gating when the rule runs.
+            Empty dict means no gate.
+        rows: one dict per DB row sharing this rule_name. Each dict
+            carries {condition, applies_to, finding_code, severity,
+            message_template}. Empty for constant-defined rules.
     """
     name: str
-    callable: Rule
+    callable: Rule | None
     applies_to: list[str]
     condition: dict[str, Any] = field(default_factory=dict)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -473,27 +481,34 @@ def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
     # callable runs exactly once per evaluation. The first row's
     # condition and applies_to are used -- the seed guarantees
     # consistency across rows that share a name.
-    grouped: dict[str, dict[str, dict]] = {}
+    grouped: dict[str, dict[str, list[dict]]] = {}
     for row in rows:
         bucket = grouped.setdefault(row.package_name, {})
-        if row.rule_name not in bucket:
-            bucket[row.rule_name] = {
-                "applies_to": list(row.applies_to) if row.applies_to else [],
-                "condition": dict(row.condition) if row.condition else {},
-            }
+        bucket.setdefault(row.rule_name, []).append({
+            "applies_to": list(row.applies_to) if row.applies_to else [],
+            "condition": dict(row.condition) if row.condition else {},
+            "finding_code": row.finding_code,
+            "severity": row.severity,
+            "message_template": row.message,
+        })
 
     result: dict[str, list[LoadedRule]] = {}
     for package, by_name in grouped.items():
         rules: list[LoadedRule] = []
-        for name, meta in by_name.items():
+        for name, row_metas in by_name.items():
             fn = legacy_by_name.get(name)
-            if fn is not None:
-                rules.append(LoadedRule(
-                    name=name,
-                    callable=fn,
-                    applies_to=meta["applies_to"],
-                    condition=meta["condition"],
-                ))
+            # First row's metadata is the "primary" for the rule --
+            # applies_to and condition are read by the current engine.
+            # The full rows list carries every sibling row's metadata
+            # for Phase 2.5f's row-driven emission.
+            first = row_metas[0]
+            rules.append(LoadedRule(
+                name=name,
+                callable=fn,
+                applies_to=first["applies_to"],
+                condition=first["condition"],
+                rows=row_metas,
+            ))
         if rules:
             result[package] = rules
     return result
