@@ -52,7 +52,7 @@ def test_nullable_shariah_contract_type_stays_none():
     assert ctx["instrument"]["shariah_contract_type"] is None
 
 
-def test_type_specific_data_exposes_only_four_keys():
+def test_type_specific_data_exposes_only_whitelisted_keys():
     instr = make_instrument(
         txn_type=TransactionType.LOAN,
         mode=ComplianceMode.TRADITIONAL,
@@ -63,7 +63,7 @@ def test_type_specific_data_exposes_only_four_keys():
             "ijara_rental_rate": 0.04,
             "unrelated_key": "should not appear",
         },
-    )
+    )   
     ctx = build_context(instr, [])
     tsd = ctx["instrument"]["type_specific_data"]
     assert set(tsd.keys()) == {
@@ -71,6 +71,10 @@ def test_type_specific_data_exposes_only_four_keys():
         "fixed_coupon",
         "profit_rate",
         "ijara_rental_rate",
+        "leverage",
+        "margin",
+        "derivative",
+        "future",
     }
     assert tsd["interest_rate"] == 0.06
     assert "unrelated_key" not in tsd
@@ -150,3 +154,25 @@ def test_context_feeds_json_logic_evaluator():
         {"empty": [{"var": "documents_by_type.kyc"}]},
         ctx,
     ) is True
+
+
+def test_context_exposes_gharar_keys():
+    """The four gharar markers are in the serialized context."""
+    instr = make_instrument(
+        txn_type=TransactionType.SUKUK,
+        mode=ComplianceMode.ISLAMIC,
+        type_specific_data={
+            "leverage": "yes",
+            "margin": False,
+            "derivative": "0",
+            "future": None,
+        },
+    )
+    ctx = build_context(instr, [])
+    tsd = ctx["instrument"]["type_specific_data"]
+    assert "leverage" in tsd
+    assert "margin" in tsd
+    assert "derivative" in tsd
+    assert "future" in tsd
+    assert tsd["leverage"] == "yes"
+    assert tsd["margin"] is False

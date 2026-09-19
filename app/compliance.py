@@ -65,7 +65,8 @@ def build_context(
     the JSON Logic evaluator consumes.
 
     Field selection follows the diagnostic: rules read exactly five
-    instrument attributes, four type_specific_data keys, and the
+    instrument attributes, eight type_specific_data keys (four
+    interest/profit keys plus the four gharar markers), and the
     document types in the batch. Nothing else is exposed. Keeping
     the surface minimal makes the JSON Logic expressions easy to
     audit and stops a misconfigured condition from reading state it
@@ -77,7 +78,7 @@ def build_context(
     """
     tsd = instrument.type_specific_data or {}
 
-    # Serialize only the four keys any current rule reads. Adding a
+    # Serialize only the eight keys any current rule reads. Adding a
     # key here is a deliberate act; anything else stays opaque.
     type_specific_data = {
         k: tsd.get(k)
@@ -86,6 +87,10 @@ def build_context(
             "fixed_coupon",
             "profit_rate",
             "ijara_rental_rate",
+            "leverage",
+            "margin",
+            "derivative",
+            "future",
         )
     }
 
@@ -152,12 +157,18 @@ class LoadedRule:
         rows: one dict per DB row sharing this rule_name. Each dict
             carries {condition, applies_to, finding_code, severity,
             message_template}. Empty for constant-defined rules.
+        mode: "callable" -- rule.callable(ctx) runs and produces
+            findings. "row" -- engine iterates rule.rows and emits one
+            finding per row whose condition evaluates true. Defaults
+            to "callable" so every constant and every row whose
+            condition is still {} takes the pre-2.5f path.
     """
     name: str
     callable: Rule | None
     applies_to: list[str]
     condition: dict[str, Any] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
+    mode: str = "callable"
 
 
 @dataclass
@@ -502,12 +513,21 @@ def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
             # The full rows list carries every sibling row's metadata
             # for Phase 2.5f's row-driven emission.
             first = row_metas[0]
+            # Row mode only when every row carries a real condition.
+            # If any sibling row still has {}, the rule is treated as
+            # unmigrated and falls back to callable mode. This lets a
+            # partial seed rollout degrade cleanly.
+            all_gated = all(
+                bool(r.get("condition")) for r in row_metas
+            )
+            mode = "row" if (all_gated and fn is None) else "callable"
             rules.append(LoadedRule(
                 name=name,
                 callable=fn,
                 applies_to=first["applies_to"],
                 condition=first["condition"],
                 rows=row_metas,
+                mode=mode,
             ))
         if rules:
             result[package] = rules
@@ -563,12 +583,35 @@ class ComplianceGateway:
         for rule in rules:
             if rule.applies_to and tt_value not in rule.applies_to:
                 continue
+
+            if rule.mode == "row":
+                # Row-driven emission (Phase 2.5f). Each row carries
+                # its own condition and finding metadata. A row whose
+                # condition is empty is skipped -- row mode never
+                # emits unconditionally.
+                for row in rule.rows:
+                    row_condition = row.get("condition") or {}
+                    if not row_condition:
+                        continue
+                    if json_context is None:
+                        json_context = build_context(instrument, documents)
+                    if not eval_json_logic(row_condition, json_context):
+                        continue
+                    findings.append(RuleFinding(
+                        code=row["finding_code"],
+                        severity=row["severity"],
+                        message=row["message_template"],
+                    ))
+                continue
+
+            # Callable mode (default). Existing gate + callable.
             if rule.condition:
                 if json_context is None:
                     json_context = build_context(instrument, documents)
                 if not eval_json_logic(rule.condition, json_context):
                     continue
-            findings.extend(rule.callable(ctx))
+            if rule.callable is not None:
+                findings.extend(rule.callable(ctx))
 
         blocking = any(f.severity == RuleSeverity.BLOCKING for f in findings)
 

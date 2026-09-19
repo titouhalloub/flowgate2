@@ -120,3 +120,31 @@ def test_unknown_operator_raises():
 def test_multi_key_dict_raises():
     with pytest.raises(ValueError, match="exactly one key"):
         evaluate({"var": "x", "also": "y"}, {})
+
+
+def test_meaningful_operator():
+    """meaningful returns True for values that are not the empty
+    string, "false", or "0" (after string normalization)."""
+    from app.json_logic import evaluate
+    ctx = {
+        "present": "yes",
+        "absent": None,
+        "empty": "",
+        "false_str": "false",
+        "zero_str": "0",
+        "false_bool": False,
+        "zero_num": 0,
+        "true_val": True,
+        "no": "no",
+        "spaced_zero": " 0 ",
+    }
+    assert evaluate({"meaningful": {"var": "present"}}, ctx) is True
+    assert evaluate({"meaningful": {"var": "absent"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "empty"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "false_str"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "zero_str"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "false_bool"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "zero_num"}}, ctx) is False
+    assert evaluate({"meaningful": {"var": "true_val"}}, ctx) is True
+    assert evaluate({"meaningful": {"var": "no"}}, ctx) is True
+    assert evaluate({"meaningful": {"var": "spaced_zero"}}, ctx) is False

@@ -23,6 +23,7 @@ Supported operators:
   empty       true if the argument is None, or an empty list, dict, or string
   truthy      Python truthiness of the argument
   in_range    inclusive bounds: {"in_range": [x, lo, hi]}
+  meaningful  true when str-normalized value is not "", "false", "0"
 """
 
 from __future__ import annotations
@@ -156,5 +157,17 @@ def evaluate(expression: Any, context: Any) -> Any:
         if value is None:
             return False
         return low <= value <= high
+
+    if op == "meaningful":
+        # True when the value, after string normalization, is not
+        # one of "", "false", "0". Matches the gharar check in
+        # shariah_no_speculation's callable. The presence of the
+        # key is not enough -- a value of "false" or "0" means the
+        # flag is off.
+        inner = arg[0] if isinstance(arg, list) and len(arg) == 1 else arg
+        value = evaluate(inner, context)
+        if value is None:
+            return False
+        return str(value).lower().strip() not in ("", "false", "0")
 
     raise ValueError(f"Unknown JSON Logic operator: {op!r}")
