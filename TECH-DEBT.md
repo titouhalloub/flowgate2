@@ -39,9 +39,10 @@ app/compliance.py's LoadedRule docstring says "Row mode: arrives
 in Phase 2.5f". Row mode shipped in ac0776d. Update the docstring
 on the next pass through that file.
 
-## Jurisdiction not persisted on Instrument
+## Jurisdiction not exposed in UI
 
-evaluate() accepts extra_jurisdictions per call. The Instrument
-model has no jurisdiction column, so the caller (route body) must
-pass them explicitly on every request. Persisting jurisdiction on
-Instrument, plus a UI to set it, is a later sub-phase.
+jurisdictions is persisted on Instrument and read automatically by
+the document submission route. There is no UI to set or edit it --
+it is only settable via the API's InstrumentCreate payload. Adding
+a jurisdiction field to the instrument creation/edit UI is a later
+sub-phase.

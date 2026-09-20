@@ -129,6 +129,15 @@ class Instrument(Base):
     currency: Mapped[str] = mapped_column(String(8))
     maturity_date: Mapped[datetime | None] = mapped_column(default=None)
     type_specific_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # Legal jurisdictions whose rule packages apply to this instrument.
+    # Empty list means "no extra jurisdictions" -- the compliance mode's
+    # package runs alone. Populated list means the named packages are
+    # evaluated alongside the mode's package (Phase 2.9 composition).
+    # Example: a fund with a DIFC feeder and a Cayman master stores
+    # ["difc", "cayman"].
+    jurisdictions: Mapped[list[str]] = mapped_column(JSON, default=list)
+
     underlying_asset_description: Mapped[str | None] = mapped_column(Text, default=None)
     underlying_asset_id: Mapped[str | None] = mapped_column(String(128), default=None)
     shariah_contract_type: Mapped[ShariahContractType | None] = mapped_column(

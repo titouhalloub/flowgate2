@@ -25,6 +25,7 @@ class InstrumentCreate(BaseModel):
     amount: float
     currency: str = Field(min_length=3, max_length=8)
     maturity_date: datetime | None = None
+    jurisdictions: list[str] = Field(default_factory=list)
 
 
 class InstrumentOut(BaseModel):
@@ -37,6 +38,7 @@ class InstrumentOut(BaseModel):
     shariah_contract_type: ShariahContractType | None
     shariah_review_status: ShariahReviewStatus
     underlying_asset_description: str | None
+    jurisdictions: list[str] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -48,7 +50,10 @@ class DocumentSubmit(BaseModel):
     without changing its shape."""
     text: str = Field(..., min_length=1)
     filename: str = "document.txt"
-    jurisdictions: list[str] = Field(default_factory=list)
+    # Optional per-submission override. If None, the pipeline uses
+    # the instrument's stored jurisdictions. If a list (even empty),
+    # the caller explicitly overrides.
+    jurisdictions: list[str] | None = None
 
 
 class EvidenceDocumentSubmit(BaseModel):

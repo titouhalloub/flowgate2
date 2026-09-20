@@ -289,6 +289,7 @@ def create_instrument(
         currency=payload.currency,
         maturity_date=payload.maturity_date,
         type_specific_data={},
+        jurisdictions=list(payload.jurisdictions) if payload.jurisdictions else [],
     )
     session.add(instrument)
     session.commit()
@@ -351,13 +352,18 @@ def submit_document(
     if instrument is None:
         raise HTTPException(status_code=404, detail=f"Instrument {instrument_id!r} not found")
 
+    effective_jurisdictions = (
+        payload.jurisdictions
+        if payload.jurisdictions is not None
+        else list(instrument.jurisdictions or [])
+    )
     result = process_document(
         session,
         instrument,
         ComplianceGateway(load_rule_sets(session)),
         payload.text,
         filename=payload.filename,
-        extra_jurisdictions=payload.jurisdictions,
+        extra_jurisdictions=effective_jurisdictions,
     )
     session.refresh(instrument)
     _maybe_create_convertible_proposal(session, result.document, instrument)
