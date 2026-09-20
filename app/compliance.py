@@ -31,7 +31,6 @@ from app.models.enums import (
     DocumentType,
     LedgerEntryType,
     RuleSeverity,
-    ShariahContractType,
     ShariahReviewStatus,
 )
 from app.models.orm import Document, Instrument, LedgerEntry
@@ -185,199 +184,10 @@ class ComplianceDecision:
         return any(f.severity == RuleSeverity.BLOCKING for f in self.findings)
 
 
-def _docs(ctx: RuleContext, doc_type: DocumentType) -> list[Document]:
-    return ctx.documents_by_type.get(doc_type, [])
-
-
 # ---------------------------------------------------------------------------
-# Traditional-track rules
+# Rule set registry — the configuration surface
 # ---------------------------------------------------------------------------
 
-
-def traditional_kyc_aml_present(ctx: RuleContext) -> list[RuleFinding]:
-    """KYC/AML documentation must exist before a deal proceeds."""
-    if not _docs(ctx, DocumentType.KYC):
-        return [
-            RuleFinding(
-                code="TRAD_KYC_MISSING",
-                severity=RuleSeverity.BLOCKING,
-                message="No KYC/AML document attached to the instrument.",
-            )
-        ]
-    return []
-
-
-def traditional_interest_sanity(ctx: RuleContext) -> list[RuleFinding]:
-    """Interest rate sanity bounds. Out-of-band rates are not auto-accepted.
-
-    Model-agnostic: reads ``interest_rate`` from the type_specific_data bag,
-    whether the asset is a loan, a bond-like sukuk, or anything else.
-    """
-    rate = ctx.instrument.type_specific_data.get("interest_rate")
-    if rate is None:
-        return [
-            RuleFinding(
-                code="TRAD_RATE_MISSING",
-                severity=RuleSeverity.REVIEW,
-                message="No interest_rate on record; cannot apply sanity bounds.",
-            )
-        ]
-    if not 0.0 <= float(rate) <= 0.30:
-        return [
-            RuleFinding(
-                code="TRAD_RATE_OUT_OF_BAND",
-                severity=RuleSeverity.BLOCKING,
-                message=f"Interest rate {rate} outside acceptable band [0, 0.30].",
-                detail={"rate": rate, "bounds": [0.0, 0.30]},
-            )
-        ]
-    return []
-
-
-def traditional_no_license_issue(ctx: RuleContext) -> list[RuleFinding]:
-    """Informational: record the compliance mode for audit."""
-    return [
-        RuleFinding(
-            code="TRAD_MODE_INFO",
-            severity=RuleSeverity.INFO,
-            message=f"Instrument evaluated under {ctx.instrument.compliance_mode.value} track.",
-            detail={"compliance_mode": ctx.instrument.compliance_mode.value},
-        )
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Islamic-track rules (Shariah requirement table)
-# ---------------------------------------------------------------------------
-
-
-def shariah_contract_type_declared(ctx: RuleContext) -> list[RuleFinding]:
-    """Every Islamic instrument must declare its Shariah contract type.
-
-    ``NONE`` is not acceptable for sukuk/murabaha/ijara/musharakah — the
-    contract type is what triggers the rest of the requirement table.
-    """
-    if ctx.instrument.shariah_contract_type is None or (
-        ctx.instrument.shariah_contract_type == ShariahContractType.NONE
-    ):
-        return [
-            RuleFinding(
-                code="SHAR_CONTRACT_TYPE_MISSING",
-                severity=RuleSeverity.BLOCKING,
-                message="Islamic instrument is missing a declared Shariah contract type.",
-            )
-        ]
-    return []
-
-
-def shariah_asset_backing(ctx: RuleContext) -> list[RuleFinding]:
-    """Asset-backing: sukuk/murabaha/ijara must reference a real asset."""
-    has_desc = bool(ctx.instrument.underlying_asset_description)
-    has_id = bool(ctx.instrument.underlying_asset_id)
-    if not (has_desc or has_id):
-        return [
-            RuleFinding(
-                code="SHAB_ASSET_BACKING_MISSING",
-                severity=RuleSeverity.BLOCKING,
-                message="Islamic instrument has no underlying asset description or ID.",
-            )
-        ]
-    return [
-        RuleFinding(
-            code="SHAB_ASSET_PRESENT",
-            severity=RuleSeverity.INFO,
-            message="Underlying asset is declared for the Islamic instrument.",
-        )
-    ]
-
-
-def shariah_no_fixed_interest(ctx: RuleContext) -> list[RuleFinding]:
-    """No fixed interest. Returns must be profit/rent-linked.
-
-    Forbidden indicators in the data bag: ``interest_rate`` or
-    ``fixed_coupon=True``. Rental/fund-based returns are fine.
-    """
-    tsd = ctx.instrument.type_specific_data
-    forbidden: list[str] = []
-    if tsd.get("interest_rate") is not None:
-        forbidden.append(f"interest_rate={tsd['interest_rate']}")
-    if tsd.get("fixed_coupon") is True:
-        forbidden.append("fixed_coupon=True")
-
-    if forbidden:
-        return [
-            RuleFinding(
-                code="SHAB_FIXED_INTEREST",
-                severity=RuleSeverity.BLOCKING,
-                message="Fixed interest / fixed coupon detected on the Islamic track.",
-                detail={"indicators": forbidden},
-            )
-        ]
-    return [
-        RuleFinding(
-            code="SHAB_NO_FIXED_INTEREST",
-            severity=RuleSeverity.INFO,
-            message="No fixed-interest indicators found in type_specific_data.",
-            detail={
-                "type_specific_data": {
-                    k: v
-                    for k, v in tsd.items()
-                    if k
-                    in ("interest_rate", "fixed_coupon", "profit_rate", "ijara_rental_rate")
-                }
-            },
-        )
-    ]
-
-
-def shariah_fatwa_reference(ctx: RuleContext) -> list[RuleFinding]:
-    """A fatwa document must accompany the instrument.
-
-    The document is evidence the scholar will weigh — it is not the
-    certification. Missing evidence blocks routing to approval.
-    """
-    fatwas = _docs(ctx, DocumentType.FATWA)
-    if not fatwas:
-        return [
-            RuleFinding(
-                code="SHAB_FATWA_REFERENCE_MISSING",
-                severity=RuleSeverity.BLOCKING,
-                message="No FATWA document attached; cannot route for scholar review.",
-            )
-        ]
-    return [
-        RuleFinding(
-            code="SHAB_FATWA_REFERENCE_PRESENT",
-            severity=RuleSeverity.INFO,
-            message=f"{len(fatwas)} fatwa document(s) attached for the scholar.",
-            detail={"fatwa_document_ids": [d.id for d in fatwas]},
-        )
-    ]
-
-
-def shariah_no_speculation(ctx: RuleContext) -> list[RuleFinding]:
-    """No excessive uncertainty (gharar) — a blunt MVP heuristic.
-
-    The full Shariah board review is human; the system only auto-flags the
-    obvious margin/derivative/future-style indicators.
-    """
-    tsd = ctx.instrument.type_specific_data
-    warning_markers = ["leverage", "margin", "derivative", "future"]
-    hits = [
-        k
-        for k in warning_markers
-        if str(tsd.get(k, "")).lower().strip() not in ("", "false", "0")
-    ]
-    if hits:
-        return [
-            RuleFinding(
-                code="SHAB_GHARAR_INDICATOR",
-                severity=RuleSeverity.BLOCKING,
-                message=f"Instrument exhibits potential speculative indicators: {hits}.",
-                detail={"indicators": hits},
-            )
-        ]
-    return []
 
 
 # ---------------------------------------------------------------------------
@@ -385,49 +195,251 @@ def shariah_no_speculation(ctx: RuleContext) -> list[RuleFinding]:
 # ---------------------------------------------------------------------------
 
 
+# Frozen data mirror of the DB seed (migration a27cap000012 +
+# a27cap000013). Used as a fallback when no session is available
+# (unit tests that exercise engine mechanics directly) and when the
+# compliance_rules table is empty on first boot. Every entry is in
+# row mode with callable=None -- the engine emits findings from the
+# rows list, using the same JSON Logic conditions the DB seed
+# stores. Kept in sync with the migrations by hand; a divergence
+# test in test_compliance_seed.py catches drift.
 TRADITIONAL_RULES: list[LoadedRule] = [
     LoadedRule(
         name="kyc_aml_present",
-        callable=traditional_kyc_aml_present,
+        callable=None,
         applies_to=[],
+        condition={"empty": [{"var": "documents_by_type.kyc"}]},
+        rows=[{
+            "applies_to": [],
+            "condition": {"empty": [{"var": "documents_by_type.kyc"}]},
+            "finding_code": "TRAD_KYC_MISSING",
+            "severity": RuleSeverity.BLOCKING,
+            "message_template": "No KYC/AML document attached to the instrument.",
+        }],
+        mode="row",
     ),
     LoadedRule(
         name="interest_rate_sanity",
-        callable=traditional_interest_sanity,
+        callable=None,
         applies_to=[],
+        condition={},
+        rows=[
+            {
+                "applies_to": [],
+                "condition": {"empty": [
+                    {"var": "instrument.type_specific_data.interest_rate"},
+                ]},
+                "finding_code": "TRAD_RATE_MISSING",
+                "severity": RuleSeverity.REVIEW,
+                "message_template": (
+                    "No interest_rate on record; cannot apply sanity bounds."
+                ),
+            },
+            {
+                "applies_to": [],
+                "condition": {"and": [
+                    {"!": {"empty": [
+                        {"var": "instrument.type_specific_data.interest_rate"},
+                    ]}},
+                    {"!": {"in_range": [
+                        {"var": "instrument.type_specific_data.interest_rate"},
+                        0.0, 0.30,
+                    ]}},
+                ]},
+                "finding_code": "TRAD_RATE_OUT_OF_BAND",
+                "severity": RuleSeverity.BLOCKING,
+                "message_template": (
+                    "Interest rate outside acceptable band [0, 0.30]."
+                ),
+            },
+        ],
+        mode="row",
     ),
     LoadedRule(
         name="mode_info",
-        callable=traditional_no_license_issue,
+        callable=None,
         applies_to=[],
+        condition={"==": [1, 1]},
+        rows=[{
+            "applies_to": [],
+            "condition": {"==": [1, 1]},
+            "finding_code": "TRAD_MODE_INFO",
+            "severity": RuleSeverity.INFO,
+            "message_template": (
+                "Instrument evaluated under traditional track."
+            ),
+        }],
+        mode="row",
     ),
 ]
 
 ISLAMIC_RULES: list[LoadedRule] = [
     LoadedRule(
         name="contract_type_declared",
-        callable=shariah_contract_type_declared,
+        callable=None,
         applies_to=[],
+        condition={"in": [
+            {"var": "instrument.shariah_contract_type"},
+            [None, "none"],
+        ]},
+        rows=[{
+            "applies_to": [],
+            "condition": {"in": [
+                {"var": "instrument.shariah_contract_type"},
+                [None, "none"],
+            ]},
+            "finding_code": "SHAR_CONTRACT_TYPE_MISSING",
+            "severity": RuleSeverity.BLOCKING,
+            "message_template": (
+                "Islamic instrument is missing a declared Shariah "
+                "contract type."
+            ),
+        }],
+        mode="row",
     ),
     LoadedRule(
         name="asset_backing",
-        callable=shariah_asset_backing,
+        callable=None,
         applies_to=[],
+        condition={},
+        rows=[
+            {
+                "applies_to": [],
+                "condition": {"and": [
+                    {"empty": [
+                        {"var": "instrument.underlying_asset_description"},
+                    ]},
+                    {"empty": [
+                        {"var": "instrument.underlying_asset_id"},
+                    ]},
+                ]},
+                "finding_code": "SHAB_ASSET_BACKING_MISSING",
+                "severity": RuleSeverity.BLOCKING,
+                "message_template": (
+                    "Islamic instrument has no underlying asset "
+                    "description or ID."
+                ),
+            },
+            {
+                "applies_to": [],
+                "condition": {"or": [
+                    {"!": {"empty": [
+                        {"var": "instrument.underlying_asset_description"},
+                    ]}},
+                    {"!": {"empty": [
+                        {"var": "instrument.underlying_asset_id"},
+                    ]}},
+                ]},
+                "finding_code": "SHAB_ASSET_PRESENT",
+                "severity": RuleSeverity.INFO,
+                "message_template": (
+                    "Underlying asset is declared for the Islamic "
+                    "instrument."
+                ),
+            },
+        ],
+        mode="row",
     ),
     LoadedRule(
         name="no_fixed_interest",
-        callable=shariah_no_fixed_interest,
+        callable=None,
         applies_to=[],
+        condition={},
+        rows=[
+            {
+                "applies_to": [],
+                "condition": {"or": [
+                    {"!": {"empty": [
+                        {"var": "instrument.type_specific_data.interest_rate"},
+                    ]}},
+                    {"==": [
+                        {"var": "instrument.type_specific_data.fixed_coupon"},
+                        True,
+                    ]},
+                ]},
+                "finding_code": "SHAB_FIXED_INTEREST",
+                "severity": RuleSeverity.BLOCKING,
+                "message_template": (
+                    "Fixed interest / fixed coupon detected on the "
+                    "Islamic track."
+                ),
+            },
+            {
+                "applies_to": [],
+                "condition": {"!": {"or": [
+                    {"!": {"empty": [
+                        {"var": "instrument.type_specific_data.interest_rate"},
+                    ]}},
+                    {"==": [
+                        {"var": "instrument.type_specific_data.fixed_coupon"},
+                        True,
+                    ]},
+                ]}},
+                "finding_code": "SHAB_NO_FIXED_INTEREST",
+                "severity": RuleSeverity.INFO,
+                "message_template": (
+                    "No fixed-interest indicators found in "
+                    "type_specific_data."
+                ),
+            },
+        ],
+        mode="row",
     ),
     LoadedRule(
         name="fatwa_reference",
-        callable=shariah_fatwa_reference,
+        callable=None,
         applies_to=[],
+        condition={},
+        rows=[
+            {
+                "applies_to": [],
+                "condition": {"empty": [{"var": "documents_by_type.fatwa"}]},
+                "finding_code": "SHAB_FATWA_REFERENCE_MISSING",
+                "severity": RuleSeverity.BLOCKING,
+                "message_template": (
+                    "No FATWA document attached; cannot route for "
+                    "scholar review."
+                ),
+            },
+            {
+                "applies_to": [],
+                "condition": {"!": {"empty": [
+                    {"var": "documents_by_type.fatwa"},
+                ]}},
+                "finding_code": "SHAB_FATWA_REFERENCE_PRESENT",
+                "severity": RuleSeverity.INFO,
+                "message_template": (
+                    "Fatwa document(s) attached for the scholar."
+                ),
+            },
+        ],
+        mode="row",
     ),
     LoadedRule(
         name="no_speculation",
-        callable=shariah_no_speculation,
+        callable=None,
         applies_to=[],
+        condition={"or": [
+            {"meaningful": {"var": "instrument.type_specific_data.leverage"}},
+            {"meaningful": {"var": "instrument.type_specific_data.margin"}},
+            {"meaningful": {"var": "instrument.type_specific_data.derivative"}},
+            {"meaningful": {"var": "instrument.type_specific_data.future"}},
+        ]},
+        rows=[{
+            "applies_to": [],
+            "condition": {"or": [
+                {"meaningful": {"var": "instrument.type_specific_data.leverage"}},
+                {"meaningful": {"var": "instrument.type_specific_data.margin"}},
+                {"meaningful": {"var": "instrument.type_specific_data.derivative"}},
+                {"meaningful": {"var": "instrument.type_specific_data.future"}},
+            ]},
+            "finding_code": "SHAB_GHARAR_INDICATOR",
+            "severity": RuleSeverity.BLOCKING,
+            "message_template": (
+                "Instrument exhibits potential speculative indicators."
+            ),
+        }],
+        mode="row",
     ),
 ]
 

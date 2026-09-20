@@ -17,6 +17,17 @@ from app.models.enums import RuleSeverity
 from app.models.orm import ComplianceRule
 
 
+def _override_rows(rule, new_condition):
+    """Return a copy of `rule` with every row's condition replaced.
+    Used by tests that inject a gate on a row-mode LoadedRule."""
+    new_rows = []
+    for r in rule.rows:
+        c = dict(r)
+        c["condition"] = new_condition
+        new_rows.append(c)
+    return _replace(rule, rows=new_rows, condition=new_condition)
+
+
 def test_loaded_rule_is_frozen():
     """LoadedRule instances are immutable after construction."""
     rule = LoadedRule(
@@ -42,7 +53,8 @@ def test_constants_are_loaded_rule_instances():
     for rules in RULE_SETS.values():
         for rule in rules:
             assert isinstance(rule, LoadedRule)
-            assert callable(rule.callable)
+            assert rule.callable is None
+            assert rule.mode == "row"
             assert isinstance(rule.applies_to, list)
 
 
@@ -142,9 +154,7 @@ def test_gate_skips_rule_when_condition_false():
     scoped = []
     for rule in RULE_SETS["traditional"]:
         if rule.name == "kyc_aml_present":
-            scoped.append(_replace(
-                rule, condition={"==": [1, 0]},
-            ))
+            scoped.append(_override_rows(rule, {"==": [1, 0]}))
         else:
             scoped.append(rule)
     gateway = ComplianceGateway({
@@ -251,18 +261,14 @@ def test_gate_context_false_for_non_matching_type():
     )
     docs = []
 
+    loan_condition = {"==": [
+        {"var": "instrument.transaction_type"},
+        "loan",
+    ]}
     scoped = []
     for rule in RULE_SETS["traditional"]:
         if rule.name == "kyc_aml_present":
-            scoped.append(_replace(
-                rule,
-                condition={
-                    "==": [
-                        {"var": "instrument.transaction_type"},
-                        "loan",
-                    ],
-                },
-            ))
+            scoped.append(_override_rows(rule, loan_condition))
         else:
             scoped.append(rule)
     gateway = ComplianceGateway({
@@ -282,12 +288,15 @@ def test_gate_context_false_for_non_matching_type():
 # -----------------------------------------------------------------
 
 
-def test_constant_rules_have_empty_rows():
-    """Constants carry a callable but no DB row metadata."""
+def test_constants_are_row_mode_data():
+    """After Phase 2.5h, constants are data-only LoadedRules in row
+    mode. They carry finding metadata in the rows list and no
+    callable."""
     for rules in RULE_SETS.values():
         for rule in rules:
-            assert rule.callable is not None
-            assert rule.rows == []
+            assert rule.callable is None
+            assert rule.mode == "row"
+            assert len(rule.rows) > 0
 
 
 def test_loader_preserves_all_rows_for_shared_rule_name(db):
