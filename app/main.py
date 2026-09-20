@@ -352,7 +352,12 @@ def submit_document(
         raise HTTPException(status_code=404, detail=f"Instrument {instrument_id!r} not found")
 
     result = process_document(
-        session, instrument, ComplianceGateway(load_rule_sets(session)), payload.text, filename=payload.filename
+        session,
+        instrument,
+        ComplianceGateway(load_rule_sets(session)),
+        payload.text,
+        filename=payload.filename,
+        extra_jurisdictions=payload.jurisdictions,
     )
     session.refresh(instrument)
     _maybe_create_convertible_proposal(session, result.document, instrument)
@@ -422,8 +427,13 @@ def upload_document(
         stored_url = None  # storage failure must not block ingestion
 
     result = process_document(
-        session, instrument, ComplianceGateway(load_rule_sets(session)), text, filename=file.filename or "upload",
+        session,
+        instrument,
+        ComplianceGateway(load_rule_sets(session)),
+        text,
+        filename=file.filename or "upload",
         file_url=stored_url,
+        extra_jurisdictions=None,
     )
     session.refresh(instrument)
     _maybe_create_convertible_proposal(session, result.document, instrument)

@@ -130,7 +130,8 @@ def _normalise_raw_text(text: str) -> str:
 def process_document(session: Session, instrument: Instrument,
                      gateway: ComplianceGateway, text: str,
                      filename: str = "document.txt",
-                     file_url: str | None = None) -> PipelineResult:
+                     file_url: str | None = None,
+                     extra_jurisdictions: list[str] | None = None) -> PipelineResult:
     """Classify -> extract -> compliance gate -> ledger, one transaction.
 
     file_url: where the uploaded original was persisted (uploads/...).
@@ -238,7 +239,11 @@ def process_document(session: Session, instrument: Instrument,
     if data.get("asset_description"):
         instrument.underlying_asset_description = data["asset_description"]
 
-    decision = gateway.evaluate(instrument, [doc, *prior_docs])
+    decision = gateway.evaluate(
+        instrument,
+        [doc, *prior_docs],
+        extra_jurisdictions=extra_jurisdictions,
+    )
     instrument.shariah_review_status = decision.outcome
 
     session.add(LedgerEntry(

@@ -48,6 +48,7 @@ class DocumentSubmit(BaseModel):
     without changing its shape."""
     text: str = Field(..., min_length=1)
     filename: str = "document.txt"
+    jurisdictions: list[str] = Field(default_factory=list)
 
 
 class EvidenceDocumentSubmit(BaseModel):

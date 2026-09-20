@@ -583,6 +583,7 @@ class ComplianceGateway:
         instrument: Instrument,
         documents: Sequence[Document],
         rule_set_name: str | None = None,
+        extra_jurisdictions: list[str] | None = None,
     ) -> ComplianceDecision:
         """Run every rule in the set for the instrument's compliance mode.
 
@@ -591,10 +592,38 @@ class ComplianceGateway:
         - otherwise         -> PENDING_SCHOLAR_REVIEW (Islamic)
                                or NOT_APPLICABLE (traditional)
         Never SCHOLAR_APPROVED / SCHOLAR_REJECTED.
+
+        When ``extra_jurisdictions`` is provided, rules from every named
+        package present in ``self.rule_sets`` are evaluated alongside the
+        mode's package, and the findings merge into one decision. A
+        package name that is not present in ``self.rule_sets`` is skipped
+        and reported as an INFO finding with code
+        ``JURISDICTION_NOT_LOADED``, so the caller can see which
+        jurisdictions were unloadable without the evaluation failing.
         """
         mode = instrument.compliance_mode
-        selected = rule_set_name or mode.value
-        rules = self.rule_sets[selected]
+
+        # Determine which packages to evaluate.
+        # Primary selection: explicit rule_set_name, else the mode.
+        # Then every extra jurisdiction that exists in self.rule_sets.
+        primary = rule_set_name or mode.value
+        packages: list[str] = []
+        if primary in self.rule_sets:
+            packages.append(primary)
+        missing: list[str] = []
+        if extra_jurisdictions:
+            for j in extra_jurisdictions:
+                if j == primary:
+                    continue
+                if j in self.rule_sets:
+                    packages.append(j)
+                else:
+                    missing.append(j)
+
+        # Collect the union of every package's rules, in order.
+        rules: list[LoadedRule] = []
+        for pkg in packages:
+            rules.extend(self.rule_sets[pkg])
 
         ctx = RuleContext(instrument=instrument, documents=documents)
         findings: list[RuleFinding] = []
@@ -646,8 +675,25 @@ class ComplianceGateway:
             if rule.callable is not None:
                 findings.extend(rule.callable(ctx))
 
-        blocking = any(f.severity == RuleSeverity.BLOCKING for f in findings)
+        # Report any jurisdiction the caller asked for that we could
+        # not load. This surfaces configuration mistakes without
+        # failing the evaluation.
+        for name in missing:
+            findings.append(RuleFinding(
+                code="JURISDICTION_NOT_LOADED",
+                severity=RuleSeverity.INFO,
+                message=(
+                    f"Requested jurisdiction {name!r} has no rule set "
+                    "loaded; skipped."
+                ),
+            ))
 
+        # Recompute blocking after appending the missing-jurisdiction
+        # INFO findings (INFO never flips the outcome, but the merge
+        # keeps a single computation point).
+        blocking = any(
+            f.severity == RuleSeverity.BLOCKING for f in findings
+        )
         if mode == ComplianceMode.ISLAMIC:
             outcome = (
                 ShariahReviewStatus.SYSTEM_FLAGGED_NONCOMPLIANT
@@ -662,7 +708,7 @@ class ComplianceGateway:
             )
 
         return ComplianceDecision(
-            rule_set_name=selected,
+            rule_set_name="+".join(packages) if packages else primary,
             compliance_mode=mode,
             outcome=outcome,
             findings=findings,
@@ -678,13 +724,19 @@ def run_gateway_with_ledger(
     documents: Sequence[Document],
     rule_set_name: str | None = None,
     trace_id: str | None = None,
+    extra_jurisdictions: list[str] | None = None,
 ) -> ComplianceDecision:
     """Evaluate, persist the outcome on the instrument and write a ledger row.
 
     *Never* sets SCHOLAR_APPROVED — enforced by the ORM validates guard even
     if a bug tries.
     """
-    decision = gateway.evaluate(instrument, documents, rule_set_name)
+    decision = gateway.evaluate(
+        instrument,
+        documents,
+        rule_set_name,
+        extra_jurisdictions=extra_jurisdictions,
+    )
     trace = get_tracer().span(
         "compliance.gateway",
         rule_set=decision.rule_set_name,
