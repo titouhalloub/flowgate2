@@ -432,3 +432,113 @@ def test_engine_behavior_unchanged_for_constants():
     decision = ComplianceGateway().evaluate(instr, [])
     assert any(f.code == "TRAD_KYC_MISSING" for f in decision.findings)
 
+# -----------------------------------------------------------------
+# Phase 2.6a -- effective-date filtering.
+# -----------------------------------------------------------------
+
+from datetime import date as _date, timedelta as _td
+
+
+def _insert_rule(session, *, rule_id, rule_name, version,
+                 effective_from, effective_to, package="traditional"):
+    session.add(ComplianceRule(
+        id=rule_id,
+        package_name=package,
+        rule_name=rule_name,
+        version=version,
+        effective_from=effective_from,
+        effective_to=effective_to,
+        label=rule_name,
+        applies_to=[],
+        finding_code="TRAD_MODE_INFO",
+        severity=RuleSeverity.INFO,
+        message=f"v{version}",
+        condition={"==": [1, version]},
+        created_by="test",
+    ))
+    session.commit()
+
+
+def test_loader_excludes_future_versions(db):
+    """A version with effective_from in the future is not loaded."""
+    session = db[0]()
+    today = _date.today()
+    _insert_rule(session,
+        rule_id="mode-v1", rule_name="mode_info", version=1,
+        effective_from=today - _td(days=30), effective_to=None)
+    _insert_rule(session,
+        rule_id="mode-v2", rule_name="mode_info", version=2,
+        effective_from=today + _td(days=30), effective_to=None)
+
+    loaded = load_rule_sets(session, as_of=today)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
+        None,
+    )
+    assert entry is not None
+    assert entry.rows[0]["message_template"] == "v1"
+    session.close()
+
+
+def test_loader_excludes_expired_versions(db):
+    """A version with effective_to <= as_of is not loaded."""
+    session = db[0]()
+    today = _date.today()
+    _insert_rule(session,
+        rule_id="mode-old", rule_name="mode_info", version=1,
+        effective_from=today - _td(days=60),
+        effective_to=today - _td(days=30))
+    _insert_rule(session,
+        rule_id="mode-current", rule_name="mode_info", version=2,
+        effective_from=today - _td(days=29), effective_to=None)
+
+    loaded = load_rule_sets(session, as_of=today)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
+        None,
+    )
+    assert entry is not None
+    assert entry.rows[0]["message_template"] == "v2"
+    session.close()
+
+
+def test_loader_picks_latest_version_when_both_active(db):
+    """When two rows share a rule_name and both are within their
+    effective window, the later version supplies the primary
+    condition/applies_to."""
+    session = db[0]()
+    today = _date.today()
+    _insert_rule(session,
+        rule_id="mode-v1", rule_name="mode_info", version=1,
+        effective_from=today - _td(days=30), effective_to=None)
+    _insert_rule(session,
+        rule_id="mode-v2", rule_name="mode_info", version=2,
+        effective_from=today, effective_to=None)
+
+    loaded = load_rule_sets(session, as_of=today)
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
+        None,
+    )
+    assert entry is not None
+    assert entry.rows[0]["message_template"] == "v2"
+    assert len(entry.rows) == 2  # both rows ride along for row mode
+    session.close()
+
+
+def test_loader_as_of_none_defaults_to_today(db):
+    """Calling without as_of uses today's date."""
+    session = db[0]()
+    today = _date.today()
+    _insert_rule(session,
+        rule_id="mode-today", rule_name="mode_info", version=1,
+        effective_from=today, effective_to=None)
+    loaded = load_rule_sets(session)  # no as_of
+    entry = next(
+        (r for r in loaded["traditional"] if r.name == "mode_info"),
+        None,
+    )
+    assert entry is not None
+    assert entry.rows[0]["message_template"] == "v1"
+    session.close()
+

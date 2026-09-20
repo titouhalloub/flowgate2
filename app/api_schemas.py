@@ -616,3 +616,45 @@ class AssistantAskResponse(BaseModel):
     sources: list[str] = []
 
 
+class ComplianceRuleCreate(BaseModel):
+    """Payload to create a new version of a compliance rule.
+
+    The route performs the versioned write: if an active version
+    exists for (package_name, rule_name), its effective_to is set
+    to this payload's effective_from minus one day, and the new
+    row receives version = previous.version + 1. Otherwise version
+    starts at 1.
+    """
+    package_name: str = Field(..., min_length=1, max_length=64)
+    rule_name: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    applies_to: list[str] = Field(default_factory=list)
+    finding_code: str = Field(..., min_length=1, max_length=64)
+    severity: str = Field(..., pattern="^(blocking|review|info)$")
+    message: str = Field(..., min_length=1, max_length=512)
+    condition: dict[str, Any] = Field(default_factory=dict)
+    effective_from: date
+    created_by: str = Field(..., min_length=1, max_length=64)
+
+
+class ComplianceRuleOut(BaseModel):
+    id: str
+    package_name: str
+    rule_name: str
+    version: int
+    effective_from: date
+    effective_to: date | None
+    label: str
+    description: str | None
+    applies_to: list[str]
+    finding_code: str
+    severity: str
+    message: str
+    condition: dict[str, Any]
+    active: bool
+    created_by: str
+    created_at: datetime
+
+
+

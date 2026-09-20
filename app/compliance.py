@@ -19,9 +19,11 @@ outcome, and is persisted to the append-only ledger.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.enums import (
@@ -435,7 +437,10 @@ RULE_SETS: dict[str, list[LoadedRule]] = {
 }
 
 
-def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
+def load_rule_sets(
+    session,
+    as_of: date | None = None,
+) -> dict[str, list[LoadedRule]]:
     """Load rule sets from the database, falling back to the module
     constants when the table is empty.
 
@@ -449,12 +454,21 @@ def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
         session: SQLAlchemy Session. If None, returns the constants
             directly (used by tests that construct the gateway
             without a database).
+        as_of: the evaluation date. Defaults to today. Rows with
+            effective_from > as_of or effective_to <= as_of are
+            excluded. Among rows sharing a (package_name, rule_name),
+            the row with the latest effective_from and version wins
+            (used for the LoadedRule.condition and applies_to).
 
     Returns:
         dict[str, list[NamedRule]] -- same shape as RULE_SETS, keyed
         by package name (matching ComplianceMode.value for the two
         built-in packages).
     """
+    from datetime import date as _date
+    if as_of is None:
+        as_of = _date.today()
+
     if session is None:
         return RULE_SETS
 
@@ -462,7 +476,18 @@ def load_rule_sets(session) -> dict[str, list[LoadedRule]]:
 
     rows = (
         session.query(ComplianceRule)
-        .filter(ComplianceRule.active.is_(True))
+        .filter(
+            ComplianceRule.active.is_(True),
+            ComplianceRule.effective_from <= as_of,
+            or_(
+                ComplianceRule.effective_to.is_(None),
+                ComplianceRule.effective_to > as_of,
+            ),
+        )
+        .order_by(
+            ComplianceRule.effective_from.desc(),
+            ComplianceRule.version.desc(),
+        )
         .all()
     )
     if not rows:

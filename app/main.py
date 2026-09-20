@@ -12,7 +12,7 @@ import logging
 import re
 import secrets
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 from typing import Union
@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,8 @@ from app.api_schemas import (
     CapitalCallCreate,
     CapitalCallOut,
     CapitalCallReviewRequest,
+    ComplianceRuleCreate,
+    ComplianceRuleOut,
     PaymentCreate,
     PaymentOut,
     CapTableEventCreate,
@@ -95,6 +97,7 @@ from app.models.enums import (
     LedgerEntryType,
     ProposalStatus,
     ProposalType,
+    RuleSeverity,
     SecurityType,
     ShariahReviewStatus,
     TransferEvaluationOutcome,
@@ -107,6 +110,7 @@ from app.models.orm import (
     CapTableProposal,
     CapitalCall,
     CapitalCallPayment,
+    ComplianceRule,
     Convertible,
     Document,
     Holding,
@@ -2447,6 +2451,216 @@ def record_capital_call_payment(
     session.commit()
     session.refresh(payment)
     return PaymentOut.model_validate(payment)
+
+
+# --------------------------------------------------------------------------- #
+# Compliance rules -- Phase 2.6 CRUD. Versioned, never deleted.               #
+# --------------------------------------------------------------------------- #
+
+
+@app.get(
+    "/compliance/rules",
+    response_model=list[ComplianceRuleOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_compliance_rules(
+    package_name: str | None = None,
+    as_of: date | None = None,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[ComplianceRule]:
+    """List active rules as of a date. Defaults to today.
+
+    Returns the latest version per (package_name, rule_name) whose
+    effective window includes as_of.
+    """
+    if as_of is None:
+        as_of = date.today()
+
+    stmt = (
+        select(ComplianceRule)
+        .where(
+            ComplianceRule.active.is_(True),
+            ComplianceRule.effective_from <= as_of,
+            or_(
+                ComplianceRule.effective_to.is_(None),
+                ComplianceRule.effective_to > as_of,
+            ),
+        )
+    )
+    if package_name:
+        stmt = stmt.where(ComplianceRule.package_name == package_name)
+
+    stmt = stmt.order_by(
+        ComplianceRule.package_name.asc(),
+        ComplianceRule.rule_name.asc(),
+        ComplianceRule.version.desc(),
+    )
+
+    rows = session.execute(stmt).scalars().all()
+
+    # Keep the highest version per (package_name, rule_name)
+    seen: set[tuple[str, str]] = set()
+    latest: list[ComplianceRule] = []
+    for row in rows:
+        key = (row.package_name, row.rule_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        latest.append(row)
+    return latest
+
+
+@app.get(
+    "/compliance/rules/{package_name}/{rule_name}",
+    response_model=list[ComplianceRuleOut],
+    responses={401: {"model": ErrorOut}, 404: {"model": ErrorOut}},
+)
+def compliance_rule_history(
+    package_name: str,
+    rule_name: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[ComplianceRule]:
+    """Full version history for a rule, newest first."""
+    rows = session.execute(
+        select(ComplianceRule)
+        .where(
+            ComplianceRule.package_name == package_name,
+            ComplianceRule.rule_name == rule_name,
+        )
+        .order_by(ComplianceRule.version.desc())
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Rule {rule_name!r} not found in package {package_name!r}",
+        )
+    return list(rows)
+
+
+@app.post(
+    "/compliance/rules",
+    response_model=ComplianceRuleOut,
+    status_code=201,
+    responses={
+        401: {"model": ErrorOut},
+        400: {"model": ErrorOut},
+        409: {"model": ErrorOut},
+    },
+)
+def create_compliance_rule(
+    payload: ComplianceRuleCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> ComplianceRule:
+    """Create a new version of a compliance rule.
+
+    If an active version exists for (package_name, rule_name), it is
+    superseded: effective_to is set to the new rule's
+    effective_from minus one day, and the new row receives
+    version = previous.version + 1. The previous row is never
+    deleted -- governance history stays interpretable.
+
+    The new rule's effective_from must be strictly after the
+    current version's effective_from. Two versions cannot share
+    an effective_from -- that would create ambiguity in the
+    loader's ordering.
+    """
+    try:
+        severity = RuleSeverity(payload.severity)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown severity {payload.severity!r}"
+        ) from exc
+
+    current = session.execute(
+        select(ComplianceRule)
+        .where(
+            ComplianceRule.package_name == payload.package_name,
+            ComplianceRule.rule_name == payload.rule_name,
+            ComplianceRule.active.is_(True),
+        )
+        .order_by(
+            ComplianceRule.effective_from.desc(),
+            ComplianceRule.version.desc(),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if current is not None:
+        if payload.effective_from <= current.effective_from:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"New version's effective_from "
+                    f"({payload.effective_from}) must be strictly "
+                    f"after the current version's effective_from "
+                    f"({current.effective_from})"
+                ),
+            )
+        current.effective_to = payload.effective_from - timedelta(days=1)
+        new_version = current.version + 1
+    else:
+        new_version = 1
+
+    new_rule = ComplianceRule(
+        id=str(uuid4()),
+        package_name=payload.package_name,
+        rule_name=payload.rule_name,
+        version=new_version,
+        effective_from=payload.effective_from,
+        effective_to=None,
+        label=payload.label,
+        description=payload.description,
+        applies_to=list(payload.applies_to),
+        finding_code=payload.finding_code,
+        severity=severity,
+        message=payload.message,
+        condition=dict(payload.condition),
+        active=True,
+        created_by=payload.created_by,
+    )
+    session.add(new_rule)
+    session.commit()
+    session.refresh(new_rule)
+    return new_rule
+
+
+@app.post(
+    "/compliance/rules/{rule_id}/deactivate",
+    response_model=ComplianceRuleOut,
+    responses={
+        401: {"model": ErrorOut},
+        404: {"model": ErrorOut},
+        409: {"model": ErrorOut},
+    },
+)
+def deactivate_compliance_rule(
+    rule_id: str,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> ComplianceRule:
+    """Deactivate a single rule version.
+
+    The row is never deleted -- audit history stays intact. A
+    deactivated row is skipped by load_rule_sets and by
+    list_compliance_rules.
+    """
+    rule = session.get(ComplianceRule, rule_id)
+    if rule is None:
+        raise HTTPException(
+            status_code=404, detail=f"Rule {rule_id!r} not found"
+        )
+    if not rule.active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rule {rule_id!r} is already deactivated",
+        )
+    rule.active = False
+    session.commit()
+    session.refresh(rule)
+    return rule
 
 
 # --------------------------------------------------------------------------- #

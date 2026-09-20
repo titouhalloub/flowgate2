@@ -32,3 +32,9 @@ omits both. Production uses requirements.txt (Dockerfile). Local
 dev uses the venv, which was built from requirements.txt. The two
 files should be reconciled -- pyproject.toml is the canonical
 source per PEP 621.
+
+## LoadedRule docstring stale
+
+app/compliance.py's LoadedRule docstring says "Row mode: arrives
+in Phase 2.5f". Row mode shipped in ac0776d. Update the docstring
+on the next pass through that file.
