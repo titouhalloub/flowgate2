@@ -323,3 +323,36 @@ export interface AssistantAnswer {
   answer: string;
   sources: string[];
 }
+
+export interface ComplianceRule {
+  id: string;
+  package_name: string;
+  rule_name: string;
+  version: number;
+  effective_from: string;
+  effective_to: string | null;
+  label: string;
+  description: string | null;
+  applies_to: string[];
+  finding_code: string;
+  severity: 'blocking' | 'review' | 'info';
+  message: string;
+  condition: Record<string, unknown>;
+  active: boolean;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ComplianceRuleCreatePayload {
+  package_name: string;
+  rule_name: string;
+  label: string;
+  description?: string | null;
+  applies_to: string[];
+  finding_code: string;
+  severity: 'blocking' | 'review' | 'info';
+  message: string;
+  condition: Record<string, unknown>;
+  effective_from: string;
+  created_by: string;
+}

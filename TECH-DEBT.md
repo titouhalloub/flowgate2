@@ -46,3 +46,12 @@ the document submission route. There is no UI to set or edit it --
 it is only settable via the API's InstrumentCreate payload. Adding
 a jurisdiction field to the instrument creation/edit UI is a later
 sub-phase.
+
+## Compliance rule editor: raw JSON condition input
+
+The rule editor accepts `condition` as a raw JSON textarea.
+Compliance officers who do not know JSON Logic cannot author a rule
+without help. A structured builder (key/value rows, or an
+evaluator-picker once the rule vocabulary stabilizes) is the eventual
+fix. Documented here so the textarea is not mistaken for a finished
+UX.

@@ -62,6 +62,11 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
       label: 'Repository Code & Docs',
       icon: Code,
     },
+    {
+      id: 'compliance',
+      label: 'Compliance Rules',
+      icon: ShieldCheck,
+    },
   ];
 
   return (

@@ -546,3 +546,30 @@ export async function askAssistant(
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+import type { ComplianceRule, ComplianceRuleCreatePayload } from '../types';
+
+export async function listComplianceRules(): Promise<ComplianceRule[]> {
+  const rows = await request<Array<Record<string, unknown>>>('/compliance/rules');
+  return rows as unknown as ComplianceRule[];
+}
+
+export async function getComplianceRule(
+  packageName: string,
+  ruleName: string,
+): Promise<ComplianceRule[]> {
+  const rows = await request<Array<Record<string, unknown>>>(
+    `/compliance/rules/${encodeURIComponent(packageName)}/${encodeURIComponent(ruleName)}`,
+  );
+  return rows as unknown as ComplianceRule[];
+}
+
+export async function createComplianceRule(
+  payload: ComplianceRuleCreatePayload,
+): Promise<ComplianceRule> {
+  const row = await request<Record<string, unknown>>('/compliance/rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return row as unknown as ComplianceRule;
+}
