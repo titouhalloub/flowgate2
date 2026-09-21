@@ -432,6 +432,59 @@ def _coerce_date_string(value: Any) -> Any:
     return None
 
 
+def _type_fallback(annotation: Any) -> Any:
+    """Best-effort default for a required field with no declared default.
+
+    The schemas were written for the regex extractor, which either
+    fills a field or aborts; they declare almost every field as
+    required. The LLM path is probabilistic and regularly omits some
+    fields -- the user's RCL Foods doc omits `currency`, the Reed's
+    SAFE omits `valuation_cap`, etc. Rather than fail instantiation
+    on every such omission, fill a type-appropriate default.
+    """
+    import typing
+    from datetime import date as _date, datetime as _datetime
+
+    # Unwrap Optional / Union
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union:
+        args = typing.get_args(annotation)
+        if type(None) in args:
+            return None
+        # Return fallback for the first non-None member
+        for a in args:
+            if a is not type(None):
+                return _type_fallback(a)
+
+    # Typed lists / dicts
+    if origin in (list, typing.List):
+        return []
+    if origin in (dict, typing.Dict):
+        return {}
+    if origin in (set, typing.Set):
+        return set()
+
+    # Bare / simple types
+    if annotation is str:
+        return ""
+    if annotation is int:
+        return 0
+    if annotation is float:
+        return 0.0
+    if annotation is bool:
+        return False
+    if annotation is _date:
+        return _date.today()
+    if annotation is _datetime:
+        return _datetime.utcnow()
+    if annotation is Any:
+        return None
+
+    # Unknown type -- None is the least-surprising fallback
+    return None
+
+
+
 def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]], source_text: str | None = None):
     """Build a pydantic instance from merged fields.
 
@@ -464,6 +517,25 @@ def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]], source_t
                 continue
             val = coerced
         kwargs[k] = val
+
+    # Fill any required field the LLM omitted with a type-appropriate default.
+    # This is the anti-whack-a-mole layer: the previous code dropped the
+    # field and retried, which always failed for schemas that declare a
+    # field as strictly required.
+    try:
+        from pydantic_core import PydanticUndefined
+    except ImportError:
+        PydanticUndefined = object()
+    for name, field_info in schema_class.model_fields.items():
+        if name in _META_FIELDS:
+            continue
+        if name in kwargs:
+            continue
+        default = getattr(field_info, "default", PydanticUndefined)
+        if default is not PydanticUndefined:
+            kwargs[name] = default
+        elif getattr(field_info, "is_required", lambda: False)():
+            kwargs[name] = _type_fallback(getattr(field_info, "annotation", Any))
 
     if "source_text" in schema_class.model_fields and "source_text" not in kwargs:
         kwargs["source_text"] = source_text
