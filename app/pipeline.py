@@ -127,6 +127,47 @@ def _normalise_raw_text(text: str) -> str:
     return text
 
 
+
+def _guess_type_from_filename(filename: str) -> DocumentType | None:
+    """Best-effort document type guess from the filename.
+
+    Used to rescue an UNCLASSIFIED verdict: if the extractor produces
+    confident verified fields on the guessed type, the guess is proven
+    and the classifier's uncertainty is moot.
+    """
+    name = (filename or "").lower()
+    if "safe" in name:
+        return DocumentType.SAFE
+    if "sukuk" in name:
+        return DocumentType.SUKUK_CERTIFICATE
+    if "equity" in name and "subscription" in name:
+        return DocumentType.EQUITY_SUBSCRIPTION
+    if "subscription" in name:
+        return DocumentType.SUBSCRIPTION_AGREEMENT
+    if "capital" in name and "call" in name:
+        return DocumentType.CAPITAL_CALL_NOTICE
+    if "term" in name and "sheet" in name:
+        return DocumentType.TERM_SHEET
+    if "loan" in name:
+        return DocumentType.LOAN_AGREEMENT
+    return None
+
+
+def _replace_classification(cls_obj, doc_type, confidence):
+    """Return a copy of a classification result with the given fields.
+
+    Handles dataclasses (frozen or not) and plain mutable objects.
+    """
+    import dataclasses
+    if dataclasses.is_dataclass(cls_obj) and not isinstance(cls_obj, type):
+        return dataclasses.replace(
+            cls_obj, document_type=doc_type, confidence=confidence,
+        )
+    cls_obj.document_type = doc_type
+    cls_obj.confidence = confidence
+    return cls_obj
+
+
 def process_document(session: Session, instrument: Instrument,
                      gateway: ComplianceGateway, text: str,
                      filename: str = "document.txt",
@@ -171,6 +212,23 @@ def process_document(session: Session, instrument: Instrument,
     # is a strong signal even when the OCR'd text is sparse or partial.
     classification = classify_document(text, filename=filename)
 
+    # Rescue: if the classifier bailed, try a filename-derived guess.
+    # The extractor is the stronger oracle: if it produces confident
+    # verified fields on the guess, the classification was right.
+    _rescued_outcome = None
+    if classification.document_type == DocumentType.UNCLASSIFIED:
+        _guess = _guess_type_from_filename(filename)
+        if _guess is not None:
+            _candidate = run_extraction(text, _guess.value)
+            if (_candidate is not None
+                    and _candidate.extraction is not None
+                    and not _candidate.routed_to_review):
+                classification = _replace_classification(
+                    classification, _guess,
+                    max(0.75, _candidate.confidence),
+                )
+                _rescued_outcome = _candidate
+
     if classification.document_type == DocumentType.UNCLASSIFIED:
         doc = make_doc(DocumentType.UNCLASSIFIED, classification.confidence, 0.0,
                        IngestionSource.MANUAL_ENTRY, DocumentStatus.REVIEW_NEEDED)
@@ -186,7 +244,10 @@ def process_document(session: Session, instrument: Instrument,
                               ShariahReviewStatus.NOT_APPLICABLE, True)
 
     # 2. Extraction: typed -> JSONB with schema name + version (gap #2).
-    outcome = run_extraction(text, classification.document_type.value)
+    if _rescued_outcome is not None:
+        outcome = _rescued_outcome
+    else:
+        outcome = run_extraction(text, classification.document_type.value)
 
     # The instrument container was created by the caller (often with placeholder
     # values); once extraction read the actual document, carry the deal fields
