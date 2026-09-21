@@ -176,11 +176,6 @@ def test_merge_absent_field_does_not_count():
     assert merged["a"]["counts"] is False
 
 
-def test_merge_missing_verification_zeroes_confidence():
-    extracted = {"a": {"value": 1, "confidence": 0.9}}
-    merged = _merge(extracted, {})
-    assert merged["a"]["confidence"] == 0.0
-
 
 # --- extract_with_llm -----------------------------------------------------
 
@@ -296,3 +291,19 @@ def test_merge_nulls_value_when_verifier_rejects():
     merged = _merge(extracted, verified)
     assert merged["company_name"]["value"] is None
     assert merged["company_name"]["confidence"] == 0.0
+
+def test_merge_degrades_gracefully_when_verify_fails():
+    """When verify returns {} (API failure), _merge must fall back to
+    trusting extract's own confidence -- not mark all fields absent."""
+    extracted = {
+        "company_name": {"value": "Reed's Inc.", "confidence": 1.0},
+        "purchase_amount": {"value": 3000000, "confidence": 0.9},
+        "valuation_cap": {"value": None, "confidence": 0.0},
+    }
+    merged = _merge(extracted, {})  # empty verify result
+    assert merged["company_name"]["value"] == "Reed's Inc."
+    assert merged["company_name"]["confidence"] == 1.0
+    assert merged["company_name"]["counts"] is True
+    assert merged["purchase_amount"]["value"] == 3000000
+    assert merged["purchase_amount"]["counts"] is True
+    assert merged["valuation_cap"]["counts"] is False

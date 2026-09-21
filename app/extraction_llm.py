@@ -275,9 +275,26 @@ def _merge(
         contributes to the aggregate.
     """
     merged: dict[str, dict[str, Any]] = {}
+    verify_failed = not verified  # verify returned {} -- fell back to trusting extract
     for field, e in extracted.items():
         if not isinstance(e, dict):
             continue
+
+        if verify_failed:
+            # Verify step failed at the API level. Degrade to extract-only:
+            # a non-null value counts at extract's own confidence; a null
+            # value is treated as not present.
+            val = e.get("value")
+            if val is None:
+                merged[field] = {"value": None, "confidence": 0.0, "counts": False}
+            else:
+                try:
+                    conf = float(e.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    conf = 0.0
+                merged[field] = {"value": val, "confidence": conf, "counts": True}
+            continue
+
         v = verified.get(field, {})
         if not isinstance(v, dict):
             v = {}
