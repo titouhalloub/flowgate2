@@ -307,3 +307,31 @@ def test_merge_degrades_gracefully_when_verify_fails():
     assert merged["purchase_amount"]["value"] == 3000000
     assert merged["purchase_amount"]["counts"] is True
     assert merged["valuation_cap"]["counts"] is False
+
+def test_extract_with_llm_stores_correct_extracted_data_shape(monkeypatch):
+    """extracted_data must be {"data": {flat fields}} for downstream consumers.
+
+    _backfill_deal_container, _maybe_create_convertible_proposal, and
+    create_cap_table_proposal all read .get("data", {}).get(field_name).
+    If we store the debug-shape {field: {value, confidence, counts}} the
+    proposal route 400s on every SAFE upload.
+    """
+    fake = _FakeClient([
+        json.dumps(EXTRACT_RESPONSE),
+        json.dumps(VERIFY_RESPONSE),
+    ])
+    monkeypatch.setattr(
+        "app.extraction_llm._get_client",
+        lambda: (fake, "test-model"),
+    )
+    outcome = extract_with_llm(SAFE_TEXT, "safe")
+    assert outcome is not None
+    ed = outcome.extracted_data
+    assert isinstance(ed, dict)
+    assert "data" in ed
+    inner = ed["data"]
+    assert inner.get("schema_name") == "SafeExtraction"
+    assert inner.get("company_name") == "Acme Robotics, Inc."
+    assert isinstance(inner.get("purchase_amount"), (int, float))
+    # The debug-only shape must NOT be stored.
+    assert not isinstance(inner.get("company_name"), dict)

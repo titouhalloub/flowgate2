@@ -116,7 +116,7 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
             extraction=instance,
             confidence=confidence,
             routed_to_review=confidence < settings.extraction_llm_min_confidence,
-            extracted_data=merged,
+            extracted_data={"data": instance.model_dump(mode="json")},
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM stage=outcome raised: %s", exc)
