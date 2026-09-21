@@ -244,3 +244,29 @@ def test_run_extraction_falls_back_to_regex_when_no_llm(monkeypatch):
     assert outcome is not None
     assert isinstance(outcome.confidence, float)
     assert isinstance(outcome.routed_to_review, bool)
+
+def test_extract_with_llm_handles_human_date_format(monkeypatch):
+    """Reproduces the Reed's Inc. SAFE failure: LLM returns
+    'January 16, 2023' as a string; must be coerced, not dropped."""
+    import datetime
+    extract = dict(EXTRACT_RESPONSE)
+    extract["document_date"] = {
+        "value": "January 16, 2023",
+        "evidence": "Date: January 16, 2023",
+        "confidence": 0.9,
+    }
+    verify = dict(VERIFY_RESPONSE)
+    verify["document_date"] = {
+        "supported": True,
+        "evidence": "January 16, 2023",
+        "confidence": 0.9,
+    }
+    fake = _FakeClient([json.dumps(extract), json.dumps(verify)])
+    monkeypatch.setattr(
+        "app.extraction_llm._get_client",
+        lambda: (fake, "test-model"),
+    )
+    outcome = extract_with_llm(SAFE_TEXT, "safe")
+    assert outcome is not None
+    assert outcome.extraction is not None
+    assert outcome.extraction.document_date == datetime.date(2023, 1, 16)

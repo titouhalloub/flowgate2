@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from app.config import settings
@@ -67,12 +68,12 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
             return None
         verified = _call_verify(client, model, text, extracted)
         merged = _merge(extracted, verified)
-        confidence = _aggregate_confidence(
-            merged, SAFE_CRITICAL, SAFE_STANDARD, SAFE_OPTIONAL
-        )
         instance = _instantiate_safe(merged)
         if instance is None:
             return None
+        confidence = _aggregate_confidence(
+            merged, SAFE_CRITICAL, SAFE_STANDARD, SAFE_OPTIONAL
+        )
         from app.extraction import ExtractionOutcome
         return ExtractionOutcome(
             schema_name="SafeExtraction",
@@ -204,17 +205,75 @@ def _merge(
     return merged
 
 
-def _instantiate_safe(merged: dict[str, dict[str, Any]]):
-    from app.schemas import SafeExtraction
+def _coerce_date_string(value: Any) -> Any:
+    """Coerce an LLM-returned date string to a date object.
+    Returns None when the string cannot be parsed."""
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return value
     try:
-        kwargs = {
-            k: merged[k]["value"]
-            for k in merged
-            if merged[k].get("value") is not None
-        }
+        return date.fromisoformat(value)
+    except ValueError:
+        pass
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y",
+                "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _instantiate_safe(merged: dict[str, dict[str, Any]]):
+    """Build a SafeExtraction from merged fields.
+    Coerces date strings; drops fields pydantic rejects rather than
+    abandoning the whole extraction. Mutates merged in place so the
+    aggregate confidence reflects any drops."""
+    from app.schemas import SafeExtraction
+    from pydantic import ValidationError
+
+    kwargs: dict[str, Any] = {}
+    for k, v in merged.items():
+        val = v.get("value")
+        if val is None:
+            continue
+        if k == "document_date":
+            coerced = _coerce_date_string(val)
+            if coerced is None:
+                merged[k]["confidence"] = 0.0
+                logger.warning(
+                    "document_date unparseable, dropping: %r", val
+                )
+                continue
+            val = coerced
+        kwargs[k] = val
+
+    try:
         return SafeExtraction(**kwargs)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("SafeExtraction validation failed: %s", exc)
+    except ValidationError as exc:
+        bad_fields = set()
+        for err in exc.errors():
+            loc = err.get("loc", ())
+            if loc:
+                bad_fields.add(loc[0])
+        logger.warning(
+            "SafeExtraction validation failed; dropping %s",
+            sorted(bad_fields),
+        )
+        for f in bad_fields:
+            kwargs.pop(f, None)
+            if f in merged:
+                merged[f]["confidence"] = 0.0
+        try:
+            return SafeExtraction(**kwargs)
+        except Exception as exc2:
+            logger.warning("SafeExtraction failed after drop: %s", exc2)
+            return None
+    except Exception as exc:
+        logger.warning("SafeExtraction unexpected error: %s", exc)
         return None
 
 
