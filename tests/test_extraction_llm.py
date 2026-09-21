@@ -397,3 +397,29 @@ def test_aggregate_default_weight_for_unlisted_field():
     }
     result = _aggregate_confidence(per_field, [], [], [])
     assert result == round((1.0 + 0.5) / 2.0, 3)
+
+def test_instantiate_fills_source_text_when_required():
+    """E3.1: schemas that declare source_text (str, required) must have
+    it auto-filled from the pipeline input, not from the LLM response.
+
+    Provides real values for the schema's other required fields, matching
+    what the LLM actually returns on a real document (per the RCL Foods
+    production log), so the test exercises only the source_text path.
+    """
+    from app.schemas import SubscriptionAgreementExtraction
+    from app.extraction_llm import _instantiate
+
+    merged = {
+        "fund_name": {"value": "Test Fund LP", "confidence": 0.9, "counts": True},
+        "investor_name": {"value": "Test Investor LLC", "confidence": 0.9, "counts": True},
+        "commitment_amount": {"value": 1000000.0, "confidence": 0.9, "counts": True},
+        "currency": {"value": "USD", "confidence": 0.9, "counts": True},
+    }
+
+    inst = _instantiate(
+        SubscriptionAgreementExtraction, merged,
+        source_text="the full source document text",
+    )
+    assert inst is not None
+    assert inst.source_text == "the full source document text"
+    assert inst.fund_name == "Test Fund LP"
