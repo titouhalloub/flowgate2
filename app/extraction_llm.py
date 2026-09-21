@@ -137,7 +137,7 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
         return None
 
     try:
-        instance = _instantiate(schema_class, merged)
+        instance = _instantiate(schema_class, merged, source_text=text)
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM instantiate raised: %s", exc)
         return None
@@ -432,7 +432,7 @@ def _coerce_date_string(value: Any) -> Any:
     return None
 
 
-def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]]):
+def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]], source_text: str | None = None):
     """Build a pydantic instance from merged fields.
 
     Coerces date strings; drops fields pydantic rejects rather than
@@ -464,6 +464,9 @@ def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]]):
                 continue
             val = coerced
         kwargs[k] = val
+
+    if "source_text" in schema_class.model_fields and "source_text" not in kwargs:
+        kwargs["source_text"] = source_text
 
     try:
         return schema_class(**kwargs)
