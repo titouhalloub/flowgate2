@@ -79,6 +79,9 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
 
     try:
         merged = _merge(extracted, verified)
+        logger.info("extracted=%s", json.dumps(extracted, default=str)[:800])
+        logger.info("verified=%s", json.dumps(verified, default=str)[:800])
+        logger.info("merged=%s", json.dumps(merged, default=str)[:800])
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM stage=merge raised: %s", exc)
         return None
@@ -258,7 +261,10 @@ def _merge(
             continue
         v = verified.get(field, {})
         if not isinstance(v, dict) or not v.get("supported", False):
-            merged[field] = {"value": e.get("value"), "confidence": 0.0}
+            # Verifier rejected: NULL the value so a hallucinated field
+            # never reaches the UI. Zeroing confidence alone was leaving
+            # unverified values visible.
+            merged[field] = {"value": None, "confidence": 0.0}
             continue
         try:
             ext_conf = float(e.get("confidence", 0.0))

@@ -270,3 +270,11 @@ def test_extract_with_llm_handles_human_date_format(monkeypatch):
     assert outcome is not None
     assert outcome.extraction is not None
     assert outcome.extraction.document_date == datetime.date(2023, 1, 16)
+
+def test_merge_nulls_value_when_verifier_rejects():
+    """A rejected field must not surface its value to the UI."""
+    extracted = {"company_name": {"value": "Demo Issuer", "confidence": 0.9}}
+    verified = {"company_name": {"supported": False, "confidence": 0.0}}
+    merged = _merge(extracted, verified)
+    assert merged["company_name"]["value"] is None
+    assert merged["company_name"]["confidence"] == 0.0
