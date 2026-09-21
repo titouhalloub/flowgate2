@@ -1,3 +1,4 @@
+import { formatCurrency } from '../currency';
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   FileText,
@@ -324,7 +325,7 @@ const [apiBase, setApiBase] = useState(
         if (pyRun.instrument?.amount) {
           extractedFieldsList.push({
             name: 'principal_amount',
-            value: `$${Number(pyRun.instrument.amount).toLocaleString()}`,
+            value: formatCurrency(pyRun.instrument.amount, pyRun.instrument.currency),
             confidence: extractConf,
             evidence: 'Financial Terms / Section 2',
           });
@@ -1471,7 +1472,7 @@ Certification: The structure described is reviewed and approved as Shariah-compl
                   <div className="flex justify-between py-1 border-b border-gray-100">
                     <span className="text-gray-500">Amount</span>
                     <span className="font-bold text-gray-900">
-                      {lastResult.instrument.amount ? `$${lastResult.instrument.amount.toLocaleString()}` : '—'}
+                      {lastResult.instrument.amount ? formatCurrency(lastResult.instrument.amount, lastResult.instrument.currency) : '—'}
                     </span>
                   </div>
                   {lastResult.extracted_fields.find((f) => f.name === 'structure' || f.name === 'contract_type') && (

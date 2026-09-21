@@ -1,3 +1,4 @@
+import { formatCurrency } from '../currency';
 import React, { useEffect, useState } from 'react';
 import {
   CapTableSnapshot,
@@ -26,8 +27,7 @@ import {
 
 // Rendering helpers for the convertibles table.
 function formatMoney(amount: number, currency: string): string {
-  const symbol = currency === 'USD' ? '$' : `${currency} `;
-  return `${symbol}${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  return formatCurrency(amount, currency);
 }
 
 function formatDiscount(rate: number | null): string {
