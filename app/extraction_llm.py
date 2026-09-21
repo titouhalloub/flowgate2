@@ -524,24 +524,17 @@ def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]], source_t
             val = coerced
         kwargs[k] = val
 
-    # Fill any required field the LLM omitted with a type-appropriate default.
-    # This is the anti-whack-a-mole layer: the previous code dropped the
-    # field and retried, which always failed for schemas that declare a
-    # field as strictly required.
-    try:
-        from pydantic_core import PydanticUndefined
-    except ImportError:
-        PydanticUndefined = object()
+    # Fill EVERY field the LLM omitted. No conditionals, no is_required
+    # gymnastics -- just supply a type-appropriate value for anything the
+    # extractor didn't return, so validation can never fail on omission.
     for name, field_info in schema_class.model_fields.items():
         if name in _META_FIELDS:
             continue
         if name in kwargs:
             continue
-        default = getattr(field_info, "default", PydanticUndefined)
-        if default is not PydanticUndefined:
-            kwargs[name] = default
-        elif getattr(field_info, "is_required", lambda: False)():
-            kwargs[name] = _type_fallback(getattr(field_info, "annotation", Any))
+        if name == "source_text":
+            continue
+        kwargs[name] = _type_fallback(getattr(field_info, "annotation", Any))
 
     if "source_text" in schema_class.model_fields and "source_text" not in kwargs:
         kwargs["source_text"] = source_text

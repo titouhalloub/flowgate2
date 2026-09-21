@@ -17,7 +17,7 @@ services:
       - key: A27_OPENROUTER_API_KEY
         sync: false
       - key: A27_OPENROUTER_MODEL
-        value: openrouter/free
+        value: nvidia/nemotron-3-super-120b-a12b:free
       - key: A27_OPENROUTER_CLASSIFICATION_MODEL
         value: nvidia/nemotron-3-super-120b-a12b:free
       - key: A27_LLM_BACKEND_PREFERENCE
