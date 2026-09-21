@@ -64,17 +64,44 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
 
     try:
         extracted = _call_extract(client, model, text)
-        if not extracted:
-            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM stage=extract raised: %s", exc)
+        return None
+    if not extracted:
+        logger.warning("LLM stage=extract returned empty")
+        return None
+
+    try:
         verified = _call_verify(client, model, text, extracted)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM stage=verify raised: %s", exc)
+        return None
+
+    try:
         merged = _merge(extracted, verified)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM stage=merge raised: %s", exc)
+        return None
+
+    try:
         instance = _instantiate_safe(merged)
-        if instance is None:
-            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM stage=instantiate raised: %s", exc)
+        return None
+    if instance is None:
+        return None
+
+    try:
         confidence = _aggregate_confidence(
             merged, SAFE_CRITICAL, SAFE_STANDARD, SAFE_OPTIONAL
         )
-        from app.extraction import ExtractionOutcome
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM stage=aggregate raised: %s", exc)
+        return None
+
+    from app.extraction import ExtractionOutcome
+
+    try:
         return ExtractionOutcome(
             schema_name="SafeExtraction",
             schema_version="v1",
@@ -84,7 +111,7 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
             extracted_data=merged,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("LLM extraction failed, falling back to regex: %s", exc)
+        logger.exception("LLM stage=outcome raised: %s", exc)
         return None
 
 
@@ -126,9 +153,29 @@ def _call_extract(client: Any, model: str, text: str) -> dict[str, Any] | None:
         response_format={"type": "json_object"},
         temperature=0.0,
     )
-    content = resp.choices[0].message.content
-    data = json.loads(content)
+    if resp is None:
+        logger.warning("extract: OpenRouter returned None")
+        return None
+    choices = getattr(resp, "choices", None)
+    if not choices:
+        logger.warning("extract: response has no choices: %r", resp)
+        return None
+    msg = getattr(choices[0], "message", None)
+    if msg is None:
+        logger.warning("extract: choices[0].message is None")
+        return None
+    content = getattr(msg, "content", None)
+    if not content:
+        logger.warning("extract: message.content is empty")
+        return None
+    logger.info("extract: content length=%d", len(content))
+    try:
+        data = json.loads(content)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("extract: JSON parse failed: %s | head=%r", exc, content[:200])
+        return None
     if not isinstance(data, dict):
+        logger.warning("extract: parsed JSON is not a dict: %r", type(data))
         return None
     return data
 
@@ -173,9 +220,29 @@ def _call_verify(
         response_format={"type": "json_object"},
         temperature=0.0,
     )
-    content = resp.choices[0].message.content
-    data = json.loads(content)
+    if resp is None:
+        logger.warning("verify: OpenRouter returned None")
+        return {}
+    choices = getattr(resp, "choices", None)
+    if not choices:
+        logger.warning("verify: response has no choices")
+        return {}
+    msg = getattr(choices[0], "message", None)
+    if msg is None:
+        logger.warning("verify: choices[0].message is None")
+        return {}
+    content = getattr(msg, "content", None)
+    if not content:
+        logger.warning("verify: message.content is empty")
+        return {}
+    logger.info("verify: content length=%d", len(content))
+    try:
+        data = json.loads(content)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("verify: JSON parse failed: %s | head=%r", exc, content[:200])
+        return {}
     if not isinstance(data, dict):
+        logger.warning("verify: parsed JSON is not a dict")
         return {}
     return data
 
