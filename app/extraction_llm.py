@@ -158,6 +158,12 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
 
     from app.extraction import ExtractionOutcome
 
+    logger.info(
+        "LLM outcome schema=%s confidence=%.3f threshold=%.3f routed=%s",
+        schema_name, confidence, settings.extraction_llm_min_confidence,
+        confidence < settings.extraction_llm_min_confidence,
+    )
+
     try:
         return ExtractionOutcome(
             schema_name=schema_name,
