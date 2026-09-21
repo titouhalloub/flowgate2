@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -62,20 +63,24 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
         return None
     client, model = resolved
 
+    logger.info("LLM extract using model=%s", model)
     try:
-        extracted = _call_extract(client, model, text)
+        extracted = _call_with_retry(lambda: _call_extract(client, model, text))
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=extract raised: %s", exc)
+        logger.exception("LLM extract failed after retries: %s", exc)
         return None
     if not extracted:
-        logger.warning("LLM stage=extract returned empty")
+        logger.warning("LLM extract returned empty dict")
         return None
 
     try:
-        verified = _call_verify(client, model, text, extracted)
+        verified = _call_with_retry(
+            lambda: _call_verify(client, model, text, extracted),
+            attempts=2,
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=verify raised: %s", exc)
-        return None
+        logger.warning("LLM verify failed after retries, degrading: %s", exc)
+        verified = {}
 
     try:
         merged = _merge(extracted, verified)
@@ -118,6 +123,27 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
         return None
 
 
+
+def _call_with_retry(fn, *, attempts: int = 3, base_delay: float = 1.5):
+    """Retry an LLM call on transient failures.
+
+    Free OpenRouter upstreams return HTTP 200 with choices=None when
+    the provider is overloaded. Without retry, one 503 kills the
+    whole extraction. Backoff: 1.5s, 3s, 6s.
+    """
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            logger.warning("LLM attempt %d/%d failed: %s", i + 1, attempts, exc)
+            if i < attempts - 1:
+                time.sleep(base_delay * (2 ** i))
+    assert last_exc is not None
+    raise last_exc
+
+
 def _call_extract(client: Any, model: str, text: str) -> dict[str, Any] | None:
     from app.schemas import SafeExtraction
 
@@ -157,20 +183,17 @@ def _call_extract(client: Any, model: str, text: str) -> dict[str, Any] | None:
         temperature=0.0,
     )
     if resp is None:
-        logger.warning("extract: OpenRouter returned None")
-        return None
+        raise RuntimeError("extract: OpenRouter returned None")
     choices = getattr(resp, "choices", None)
     if not choices:
-        logger.warning("extract: response has no choices: %r", resp)
-        return None
+        err = getattr(resp, "error", None)
+        raise RuntimeError(f"extract: no choices in response: {err!r}")
     msg = getattr(choices[0], "message", None)
     if msg is None:
-        logger.warning("extract: choices[0].message is None")
-        return None
+        raise RuntimeError("extract: choices[0].message is None")
     content = getattr(msg, "content", None)
     if not content:
-        logger.warning("extract: message.content is empty")
-        return None
+        raise RuntimeError("extract: message.content is empty")
     logger.info("extract: content length=%d", len(content))
     try:
         data = json.loads(content)
@@ -235,20 +258,17 @@ def _call_verify(
         temperature=0.0,
     )
     if resp is None:
-        logger.warning("verify: OpenRouter returned None")
-        return {}
+        raise RuntimeError("verify: OpenRouter returned None")
     choices = getattr(resp, "choices", None)
     if not choices:
-        logger.warning("verify: response has no choices")
-        return {}
+        err = getattr(resp, "error", None)
+        raise RuntimeError(f"verify: no choices in response: {err!r}")
     msg = getattr(choices[0], "message", None)
     if msg is None:
-        logger.warning("verify: choices[0].message is None")
-        return {}
+        raise RuntimeError("verify: choices[0].message is None")
     content = getattr(msg, "content", None)
     if not content:
-        logger.warning("verify: message.content is empty")
-        return {}
+        raise RuntimeError("verify: message.content is empty")
     logger.info("verify: content length=%d", len(content))
     try:
         data = json.loads(content)
