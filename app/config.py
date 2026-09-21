@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "google/gemini-2.0-flash-exp:free"
+    # Classifier runs on a separate model: Gemini returned
+    # 'unclassified' on a valid SAFE where Nemotron scored 0.99.
+    openrouter_classification_model: str = (
+        "nvidia/nemotron-3-super-120b-a12b:free"
+    )
 
     # Which LLM backend to prefer when both keys are set: "anthropic" | "openrouter"
     llm_backend_preference: str = "openrouter"

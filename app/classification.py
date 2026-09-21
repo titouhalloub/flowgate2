@@ -645,7 +645,7 @@ def classify_with_llm(text: str) -> ClassificationResult:
             text,
             api_key=settings.openrouter_api_key,
             base_url=settings.openrouter_base_url,
-            model=settings.openrouter_model,
+            model=settings.openrouter_classification_model,
             backend="openrouter",
         )
 
