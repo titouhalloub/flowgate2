@@ -26,6 +26,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from app.config import settings
+from app.currency import detect_currency
 
 if TYPE_CHECKING:
     from app.extraction import ExtractionOutcome
@@ -488,6 +489,29 @@ def _type_fallback(annotation: Any) -> Any:
 
     # Unknown type -- None is the least-surprising fallback
     return None
+
+
+
+def _fix_currency_if_applicable(merged, text, schema_class):
+    """Override the currency field with what the document actually says.
+
+    The LLM regularly returns null, "", or a default of "USD" for the
+    currency field even when the document uses a clear non-USD marker
+    (e.g. "R 300,767,092" is South African Rand). Scan the source text
+    for a definitive signal and override when found.
+    """
+    if "currency" not in schema_class.model_fields:
+        return merged
+    detected = detect_currency(text)
+    if not detected:
+        return merged
+    current = (merged.get("currency") or {}).get("value")
+    current_norm = str(current).upper() if current else None
+    if current_norm == detected:
+        return merged
+    logger.info("currency override: %r -> %s (from source text)", current, detected)
+    merged["currency"] = {"value": detected, "confidence": 0.95, "counts": True}
+    return merged
 
 
 
