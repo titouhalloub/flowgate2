@@ -1,16 +1,20 @@
-"""LLM-based extraction with verifier (Phase E2).
+"""LLM-based extraction with verifier (Phase E3).
 
-Two OpenAI-compatible calls per document:
-  1. _call_extract — pull per-field {value, evidence, confidence}.
-  2. _call_verify  — re-check each value against the source.
+Generic across every document type registered in EXTRACTION_ROUTE_NAMES.
+The per-type differences are:
+  - which pydantic schema validates the result (resolved via the registry)
+  - optional confidence weights (fields default to 1.0 when unlisted)
 
-Per-field confidence is min(extract, verify), or 0.0 when the
-verifier marks the field unsupported. The aggregate is a weighted
-mean using the same 1.0 / 0.6 / 0.3 weights the regex extractors
-use, so the numeric range stays comparable.
+The pipeline is always:
+  1. _call_extract  -> per-field {value, evidence, confidence}
+  2. _call_verify   -> per-field {present_in_source, supported, confidence}
+  3. _merge         -> {value, confidence, counts}
+  4. _instantiate   -> pydantic instance (dates coerced, bad fields dropped)
+  5. _aggregate     -> single float in [0.0, 1.0]
 
-E2 scope: SafeExtraction only. Other document types fall through to
-the regex extractor via extract_with_llm returning None.
+The classifier remains advisory: the caller passes document_type to
+extract_with_llm, which routes the request into whichever schema is
+registered for that type.
 """
 
 from __future__ import annotations
@@ -29,10 +33,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-SAFE_CRITICAL = ["company_name", "purchase_amount", "valuation_cap", "currency"]
-SAFE_STANDARD = ["investor_name", "instrument_kind", "discount_rate"]
-SAFE_OPTIONAL = ["pro_rata_rights", "mfn_clause", "conversion_trigger", "document_date"]
+# ---------------------------------------------------------------------------
+# Confidence weights (only SAFE has explicit tuning so far).
+# Fields not listed default to weight 1.0 in the aggregate.
+# ---------------------------------------------------------------------------
+_EXPLICIT_WEIGHTS: dict[str, dict[str, list[str]]] = {
+    "safe": {
+        "critical": [
+            "company_name", "purchase_amount", "valuation_cap", "currency",
+        ],
+        "standard": [
+            "investor_name", "instrument_kind", "discount_rate",
+        ],
+        "optional": [
+            "pro_rata_rights", "mfn_clause",
+            "conversion_trigger", "document_date",
+        ],
+    },
+}
 
+_META_FIELDS = {"schema_name", "schema_version", "extracted_at", "source_text"}
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
 
 def _get_client() -> tuple[Any, str] | None:
     """Return (openai_client, model) for the preferred backend, or None.
@@ -52,20 +77,43 @@ def _get_client() -> tuple[Any, str] | None:
     return client, settings.openrouter_model
 
 
+def _call_with_retry(fn, *, attempts: int = 3, base_delay: float = 1.5):
+    """Retry an LLM call on transient failures (503, empty choices, etc.)."""
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            logger.warning("LLM attempt %d/%d failed: %s", i + 1, attempts, exc)
+            if i < attempts - 1:
+                time.sleep(base_delay * (2 ** i))
+    assert last_exc is not None
+    raise last_exc
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None":
-    """Try LLM extraction for a supported document type.
+    """Try LLM extraction for any registered document type.
     Return None on any failure so the regex extractor runs unchanged."""
-    if document_type != "safe":
-        return None  # E3 expands to the remaining schemas
+    schema_name, schema_class = _resolve_schema(document_type)
+    if schema_class is None:
+        return None
 
     resolved = _get_client()
     if resolved is None:
         return None
     client, model = resolved
 
-    logger.info("LLM extract using model=%s", model)
+    logger.info("LLM extract using model=%s schema=%s", model, schema_name)
+
     try:
-        extracted = _call_with_retry(lambda: _call_extract(client, model, text))
+        extracted = _call_with_retry(
+            lambda: _call_extract(client, model, text, schema_class)
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM extract failed after retries: %s", exc)
         return None
@@ -84,34 +132,35 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
 
     try:
         merged = _merge(extracted, verified)
-        logger.info("extracted=%s", json.dumps(extracted, default=str)[:800])
-        logger.info("verified=%s", json.dumps(verified, default=str)[:800])
-        logger.info("merged=%s", json.dumps(merged, default=str)[:800])
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=merge raised: %s", exc)
+        logger.exception("LLM merge raised: %s", exc)
         return None
 
     try:
-        instance = _instantiate_safe(merged)
+        instance = _instantiate(schema_class, merged)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=instantiate raised: %s", exc)
+        logger.exception("LLM instantiate raised: %s", exc)
         return None
     if instance is None:
         return None
 
+    weights = _EXPLICIT_WEIGHTS.get(document_type, {})
     try:
         confidence = _aggregate_confidence(
-            merged, SAFE_CRITICAL, SAFE_STANDARD, SAFE_OPTIONAL
+            merged,
+            weights.get("critical", []),
+            weights.get("standard", []),
+            weights.get("optional", []),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=aggregate raised: %s", exc)
+        logger.exception("LLM aggregate raised: %s", exc)
         return None
 
     from app.extraction import ExtractionOutcome
 
     try:
         return ExtractionOutcome(
-            schema_name="SafeExtraction",
+            schema_name=schema_name,
             schema_version="v1",
             extraction=instance,
             confidence=confidence,
@@ -119,44 +168,51 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
             extracted_data={"data": instance.model_dump(mode="json")},
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM stage=outcome raised: %s", exc)
+        logger.exception("LLM outcome construct raised: %s", exc)
         return None
 
 
+def _resolve_schema(document_type: str) -> tuple[str | None, type | None]:
+    """Map a document_type string to (schema_name, pydantic_class)."""
+    try:
+        from app.extraction import EXTRACTION_ROUTE_NAMES
+        from app.models.enums import DocumentType
+        from app import schemas as schemas_module
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("schema resolution import failed: %s", exc)
+        return None, None
 
-def _call_with_retry(fn, *, attempts: int = 3, base_delay: float = 1.5):
-    """Retry an LLM call on transient failures.
+    try:
+        doc_enum = DocumentType(document_type)
+    except ValueError:
+        return None, None
 
-    Free OpenRouter upstreams return HTTP 200 with choices=None when
-    the provider is overloaded. Without retry, one 503 kills the
-    whole extraction. Backoff: 1.5s, 3s, 6s.
-    """
-    last_exc: Exception | None = None
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            logger.warning("LLM attempt %d/%d failed: %s", i + 1, attempts, exc)
-            if i < attempts - 1:
-                time.sleep(base_delay * (2 ** i))
-    assert last_exc is not None
-    raise last_exc
+    schema_name = EXTRACTION_ROUTE_NAMES.get(doc_enum)
+    if schema_name is None:
+        return None, None
+
+    schema_class = getattr(schemas_module, schema_name, None)
+    if schema_class is None:
+        return None, None
+
+    return schema_name, schema_class
 
 
-def _call_extract(client: Any, model: str, text: str) -> dict[str, Any] | None:
-    from app.schemas import SafeExtraction
+# ---------------------------------------------------------------------------
+# Extract
+# ---------------------------------------------------------------------------
 
-    schema = SafeExtraction.model_json_schema()
+def _call_extract(client: Any, model: str, text: str, schema_class: type) -> dict[str, Any] | None:
+    schema_name = schema_class.__name__
+    docstring = (schema_class.__doc__ or "").strip()
+    schema = schema_class.model_json_schema()
     properties = schema.get("properties", {})
-    field_list = [
-        f for f in properties
-        if f not in ("schema_name", "schema_version", "extracted_at", "source_text")
-    ]
+    field_list = [f for f in properties if f not in _META_FIELDS]
 
     system = (
-        "You extract structured data from Y Combinator SAFE "
-        "(Simple Agreement for Future Equity) documents.\n\n"
+        f"You extract structured data from private-capital documents "
+        f"into the {schema_name} schema.\n\n"
+        f"Schema description:\n{docstring}\n\n"
         "Return ONLY valid JSON. For every field below, output an object:\n"
         '  {"value": <extracted value or null>,\n'
         '   "evidence": "<verbatim substring from the source, or NO EVIDENCE>",\n'
@@ -206,6 +262,10 @@ def _call_extract(client: Any, model: str, text: str) -> dict[str, Any] | None:
     return data
 
 
+# ---------------------------------------------------------------------------
+# Verify
+# ---------------------------------------------------------------------------
+
 def _call_verify(
     client: Any,
     model: str,
@@ -230,8 +290,7 @@ def _call_verify(
         '   "confidence": <0.0 to 1.0>}\n\n'
         "Rules:\n"
         "  - present_in_source=false when the source contains NO information "
-        "about this field (e.g. a SAFE with no valuation cap). Set "
-        "supported=false, confidence 0.0 in that case.\n"
+        "about this field. Set supported=false, confidence 0.0 in that case.\n"
         "  - present_in_source=true when the source explicitly states this "
         "field.\n"
         "  - supported=true ONLY when the extracted value matches the "
@@ -281,6 +340,10 @@ def _call_verify(
     return data
 
 
+# ---------------------------------------------------------------------------
+# Merge
+# ---------------------------------------------------------------------------
+
 def _merge(
     extracted: dict[str, Any],
     verified: dict[str, Any],
@@ -288,22 +351,22 @@ def _merge(
     """Combine extract + verify.
 
     Each merged entry carries a `counts` flag:
-      - counts=False: field is not present in the source; excluded from
-        the confidence aggregate (a SAFE with no valuation cap is not
-        a failure).
-      - counts=True: field is present in the source; its confidence
+      - counts=False: field not present in the source; excluded from
+        the aggregate.
+      - counts=True: field present in the source; its confidence
         contributes to the aggregate.
+
+    If verify returned {} (transient API failure), fall back to trusting
+    extract's own confidence for non-null values.
     """
     merged: dict[str, dict[str, Any]] = {}
-    verify_failed = not verified  # verify returned {} -- fell back to trusting extract
+    verify_failed = not verified
+
     for field, e in extracted.items():
         if not isinstance(e, dict):
             continue
 
         if verify_failed:
-            # Verify step failed at the API level. Degrade to extract-only:
-            # a non-null value counts at extract's own confidence; a null
-            # value is treated as not present.
             val = e.get("value")
             if val is None:
                 merged[field] = {"value": None, "confidence": 0.0, "counts": False}
@@ -323,12 +386,10 @@ def _merge(
         supported = bool(v.get("supported", False))
 
         if not present:
-            # Field genuinely absent from the source. Not a miss.
             merged[field] = {"value": None, "confidence": 0.0, "counts": False}
             continue
 
         if not supported or e.get("value") is None:
-            # Present in source but not extracted, or hallucinated.
             merged[field] = {"value": None, "confidence": 0.0, "counts": True}
             continue
 
@@ -344,6 +405,10 @@ def _merge(
         }
     return merged
 
+
+# ---------------------------------------------------------------------------
+# Instantiate
+# ---------------------------------------------------------------------------
 
 def _coerce_date_string(value: Any) -> Any:
     """Coerce an LLM-returned date string to a date object.
@@ -367,55 +432,68 @@ def _coerce_date_string(value: Any) -> Any:
     return None
 
 
-def _instantiate_safe(merged: dict[str, dict[str, Any]]):
-    """Build a SafeExtraction from merged fields.
+def _instantiate(schema_class: type, merged: dict[str, dict[str, Any]]):
+    """Build a pydantic instance from merged fields.
+
     Coerces date strings; drops fields pydantic rejects rather than
     abandoning the whole extraction. Mutates merged in place so the
-    aggregate confidence reflects any drops."""
-    from app.schemas import SafeExtraction
+    aggregate reflects any drops.
+    """
     from pydantic import ValidationError
+
+    date_fields = {
+        name for name, f in schema_class.model_fields.items()
+        if "date" in str(f.annotation).lower()
+        or (hasattr(f.annotation, "__name__") and "date" in f.annotation.__name__.lower())
+    }
 
     kwargs: dict[str, Any] = {}
     for k, v in merged.items():
+        if k in _META_FIELDS:
+            continue
+        if k not in schema_class.model_fields:
+            continue
         val = v.get("value")
         if val is None:
             continue
-        if k == "document_date":
+        if k in date_fields:
             coerced = _coerce_date_string(val)
             if coerced is None:
                 merged[k]["confidence"] = 0.0
-                logger.warning(
-                    "document_date unparseable, dropping: %r", val
-                )
+                logger.warning("date field %s unparseable, dropping: %r", k, val)
                 continue
             val = coerced
         kwargs[k] = val
 
     try:
-        return SafeExtraction(**kwargs)
+        return schema_class(**kwargs)
     except ValidationError as exc:
-        bad_fields = set()
+        bad_fields: set[str] = set()
         for err in exc.errors():
             loc = err.get("loc", ())
             if loc:
-                bad_fields.add(loc[0])
+                bad_fields.add(str(loc[0]))
         logger.warning(
-            "SafeExtraction validation failed; dropping %s",
-            sorted(bad_fields),
+            "instantiate %s failed; dropping %s",
+            schema_class.__name__, sorted(bad_fields),
         )
         for f in bad_fields:
             kwargs.pop(f, None)
             if f in merged:
                 merged[f]["confidence"] = 0.0
         try:
-            return SafeExtraction(**kwargs)
-        except Exception as exc2:
-            logger.warning("SafeExtraction failed after drop: %s", exc2)
+            return schema_class(**kwargs)
+        except Exception as exc2:  # noqa: BLE001
+            logger.warning("instantiate retry failed: %s", exc2)
             return None
-    except Exception as exc:
-        logger.warning("SafeExtraction unexpected error: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("instantiate unexpected error: %s", exc)
         return None
 
+
+# ---------------------------------------------------------------------------
+# Aggregate
+# ---------------------------------------------------------------------------
 
 def _aggregate_confidence(
     per_field: dict[str, dict[str, Any]],
@@ -425,30 +503,33 @@ def _aggregate_confidence(
 ) -> float:
     """Weighted mean over fields that are present in the source.
 
-    Fields marked counts=False (source does not mention them) are
-    excluded from both numerator and denominator. This is the correct
-    semantic: an absent optional clause is not a miss.
+    Fields in `critical` get weight 1.0, `standard` 0.6, `optional` 0.3.
+    Fields not listed in any group default to weight 1.0.
+    Fields marked counts=False are excluded entirely.
     """
-    def _num(fields: list[str], weight: float) -> float:
-        total = 0.0
-        for f in fields:
-            entry = per_field.get(f, {})
-            if not entry.get("counts", False):
-                continue
-            total += weight * float(entry.get("confidence", 0.0))
-        return total
+    field_weights: dict[str, float] = {}
+    for f in critical:
+        field_weights[f] = 1.0
+    for f in standard:
+        field_weights[f] = 0.6
+    for f in optional:
+        field_weights[f] = 0.3
 
-    def _den(fields: list[str], weight: float) -> float:
-        total = 0.0
-        for f in fields:
-            entry = per_field.get(f, {})
-            if not entry.get("counts", False):
-                continue
-            total += weight
-        return total
+    num = 0.0
+    den = 0.0
+    for field, entry in per_field.items():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("counts", False):
+            continue
+        try:
+            c = float(entry.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            c = 0.0
+        w = field_weights.get(field, 1.0)
+        num += w * c
+        den += w
 
-    num = _num(critical, 1.0) + _num(standard, 0.6) + _num(optional, 0.3)
-    den = _den(critical, 1.0) + _den(standard, 0.6) + _den(optional, 0.3)
     if den == 0:
         return 0.0
     return round(min(1.0, num / den), 3)

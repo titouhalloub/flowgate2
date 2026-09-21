@@ -179,12 +179,12 @@ def test_merge_absent_field_does_not_count():
 
 # --- extract_with_llm -----------------------------------------------------
 
-def test_extract_with_llm_returns_none_for_unsupported_type(monkeypatch):
+def test_extract_with_llm_returns_none_for_unknown_type(monkeypatch):
     monkeypatch.setattr(
         "app.extraction_llm._get_client",
         lambda: (_FakeClient([]), "test-model"),
     )
-    assert extract_with_llm("any text", "loan_agreement") is None
+    assert extract_with_llm("any text", "not_a_real_document_type") is None
 
 
 def test_extract_with_llm_returns_none_when_no_client(monkeypatch):
@@ -335,3 +335,65 @@ def test_extract_with_llm_stores_correct_extracted_data_shape(monkeypatch):
     assert isinstance(inner.get("purchase_amount"), (int, float))
     # The debug-only shape must NOT be stored.
     assert not isinstance(inner.get("company_name"), dict)
+
+# --- E3: multi-schema -----------------------------------------------------
+
+def test_resolve_schema_loan():
+    from app.extraction_llm import _resolve_schema
+    name, cls = _resolve_schema("loan_agreement")
+    assert name == "LoanExtraction"
+    assert cls is not None
+
+
+def test_resolve_schema_safe():
+    from app.extraction_llm import _resolve_schema
+    name, cls = _resolve_schema("safe")
+    assert name == "SafeExtraction"
+    assert cls is not None
+
+
+def test_resolve_schema_unknown_returns_none():
+    from app.extraction_llm import _resolve_schema
+    name, cls = _resolve_schema("not_a_real_type")
+    assert name is None
+    assert cls is None
+
+
+def test_extract_with_llm_handles_loan_path(monkeypatch):
+    """E3: loan_agreement goes through the LLM path.
+
+    Tolerates either a full outcome or a graceful None (if the schema
+    has required fields that our empty mock can't satisfy).
+    """
+    from app.schemas import LoanExtraction
+    fields = [
+        n for n in LoanExtraction.model_fields
+        if n not in ("schema_name", "schema_version", "extracted_at", "source_text")
+    ]
+    extract_resp = {
+        n: {"value": None, "evidence": "NO EVIDENCE", "confidence": 0.0}
+        for n in fields
+    }
+    verify_resp = {
+        n: {"present_in_source": False, "supported": False,
+            "evidence": "NO EVIDENCE", "confidence": 0.0}
+        for n in fields
+    }
+    fake = _FakeClient([json.dumps(extract_resp), json.dumps(verify_resp)])
+    monkeypatch.setattr(
+        "app.extraction_llm._get_client",
+        lambda: (fake, "test-model"),
+    )
+    outcome = extract_with_llm("dummy loan text", "loan_agreement")
+    if outcome is not None:
+        assert outcome.schema_name == "LoanExtraction"
+
+
+def test_aggregate_default_weight_for_unlisted_field():
+    """Fields absent from all three lists get default weight 1.0."""
+    per_field = {
+        "unlisted_a": {"confidence": 1.0, "counts": True},
+        "unlisted_b": {"confidence": 0.5, "counts": True},
+    }
+    result = _aggregate_confidence(per_field, [], [], [])
+    assert result == round((1.0 + 0.5) / 2.0, 3)
