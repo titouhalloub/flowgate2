@@ -961,6 +961,15 @@ class ExtractionOutcome:
 
 
 def run_extraction(text: str, document_type: str) -> ExtractionOutcome:
+    # Phase E1: try LLM extraction first; regex fallback on None.
+    try:
+        from app.extraction_llm import extract_with_llm as _extract_with_llm
+        _llm_outcome = _extract_with_llm(text, document_type)
+        if _llm_outcome is not None:
+            return _llm_outcome
+    except ImportError:
+        pass
+
     from app.config import settings
 
     doc_type = DocumentType(document_type)
