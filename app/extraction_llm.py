@@ -197,14 +197,25 @@ def _call_verify(
 
     system = (
         "You are a fact-checker. Given a document and a set of extracted "
-        "fields, verify whether the source supports each extracted value.\n\n"
+        "fields, determine for each field:\n"
+        "  1. Does the source document mention this field at all?\n"
+        "  2. If yes, does the extracted value match what the source says?\n\n"
         "Return ONLY valid JSON. For every field, output:\n"
-        '  {"supported": true or false,\n'
+        '  {"present_in_source": true or false,\n'
+        '   "supported": true or false,\n'
         '   "evidence": "<verbatim source snippet, or NO EVIDENCE>",\n'
         '   "confidence": <0.0 to 1.0>}\n\n'
-        "Be strict. If the source does not literally contain the value or "
-        "a clear paraphrase, mark supported=false with confidence 0.0. Do "
-        "not accept plausible-sounding values that are not grounded.\n\n"
+        "Rules:\n"
+        "  - present_in_source=false when the source contains NO information "
+        "about this field (e.g. a SAFE with no valuation cap). Set "
+        "supported=false, confidence 0.0 in that case.\n"
+        "  - present_in_source=true when the source explicitly states this "
+        "field.\n"
+        "  - supported=true ONLY when the extracted value matches the "
+        "source. supported=false when the value is a hallucination or "
+        "does not appear in the source.\n"
+        "Be strict. Do not accept plausible-sounding values that are not "
+        "grounded in the source.\n\n"
         "Return JSON only, no explanation."
     )
     user = (
@@ -254,18 +265,36 @@ def _merge(
     extracted: dict[str, Any],
     verified: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    """Combine extract + verify: min(confidence) if supported, else 0.0."""
+    """Combine extract + verify.
+
+    Each merged entry carries a `counts` flag:
+      - counts=False: field is not present in the source; excluded from
+        the confidence aggregate (a SAFE with no valuation cap is not
+        a failure).
+      - counts=True: field is present in the source; its confidence
+        contributes to the aggregate.
+    """
     merged: dict[str, dict[str, Any]] = {}
     for field, e in extracted.items():
         if not isinstance(e, dict):
             continue
         v = verified.get(field, {})
-        if not isinstance(v, dict) or not v.get("supported", False):
-            # Verifier rejected: NULL the value so a hallucinated field
-            # never reaches the UI. Zeroing confidence alone was leaving
-            # unverified values visible.
-            merged[field] = {"value": None, "confidence": 0.0}
+        if not isinstance(v, dict):
+            v = {}
+
+        present = bool(v.get("present_in_source", False))
+        supported = bool(v.get("supported", False))
+
+        if not present:
+            # Field genuinely absent from the source. Not a miss.
+            merged[field] = {"value": None, "confidence": 0.0, "counts": False}
             continue
+
+        if not supported or e.get("value") is None:
+            # Present in source but not extracted, or hallucinated.
+            merged[field] = {"value": None, "confidence": 0.0, "counts": True}
+            continue
+
         try:
             ext_conf = float(e.get("confidence", 0.0))
             ver_conf = float(v.get("confidence", 0.0))
@@ -274,6 +303,7 @@ def _merge(
         merged[field] = {
             "value": e.get("value"),
             "confidence": min(ext_conf, ver_conf),
+            "counts": True,
         }
     return merged
 
@@ -356,13 +386,32 @@ def _aggregate_confidence(
     standard: list[str],
     optional: list[str],
 ) -> float:
-    def _sum(fields: list[str], weight: float) -> float:
-        return weight * sum(
-            float(per_field.get(f, {}).get("confidence", 0.0)) for f in fields
-        )
+    """Weighted mean over fields that are present in the source.
 
-    num = _sum(critical, 1.0) + _sum(standard, 0.6) + _sum(optional, 0.3)
-    den = 1.0 * len(critical) + 0.6 * len(standard) + 0.3 * len(optional)
+    Fields marked counts=False (source does not mention them) are
+    excluded from both numerator and denominator. This is the correct
+    semantic: an absent optional clause is not a miss.
+    """
+    def _num(fields: list[str], weight: float) -> float:
+        total = 0.0
+        for f in fields:
+            entry = per_field.get(f, {})
+            if not entry.get("counts", False):
+                continue
+            total += weight * float(entry.get("confidence", 0.0))
+        return total
+
+    def _den(fields: list[str], weight: float) -> float:
+        total = 0.0
+        for f in fields:
+            entry = per_field.get(f, {})
+            if not entry.get("counts", False):
+                continue
+            total += weight
+        return total
+
+    num = _num(critical, 1.0) + _num(standard, 0.6) + _num(optional, 0.3)
+    den = _den(critical, 1.0) + _den(standard, 0.6) + _den(optional, 0.3)
     if den == 0:
         return 0.0
     return round(min(1.0, num / den), 3)

@@ -104,30 +104,34 @@ EXTRACT_RESPONSE = {
 }
 
 VERIFY_RESPONSE = {
-    "company_name": {"supported": True, "evidence": "Acme Robotics, Inc.", "confidence": 1.0},
-    "investor_name": {"supported": True, "evidence": "Sierra Capital Partners LLC", "confidence": 1.0},
-    "purchase_amount": {"supported": True, "evidence": "$100,000", "confidence": 1.0},
-    "currency": {"supported": True, "evidence": "USD", "confidence": 0.9},
-    "valuation_cap": {"supported": True, "evidence": "$8,000,000", "confidence": 1.0},
-    "discount_rate": {"supported": True, "evidence": "15%", "confidence": 1.0},
-    "instrument_kind": {"supported": True, "evidence": "Post-Money SAFE", "confidence": 1.0},
-    "pro_rata_rights": {"supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
-    "mfn_clause": {"supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
-    "conversion_trigger": {"supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
-    "document_date": {"supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
+    "company_name": {"present_in_source": True, "supported": True, "evidence": "Acme Robotics, Inc.", "confidence": 1.0},
+    "investor_name": {"present_in_source": True, "supported": True, "evidence": "Sierra Capital Partners LLC", "confidence": 1.0},
+    "purchase_amount": {"present_in_source": True, "supported": True, "evidence": "$100,000", "confidence": 1.0},
+    "currency": {"present_in_source": True, "supported": True, "evidence": "USD", "confidence": 0.9},
+    "valuation_cap": {"present_in_source": True, "supported": True, "evidence": "$8,000,000", "confidence": 1.0},
+    "discount_rate": {"present_in_source": True, "supported": True, "evidence": "15%", "confidence": 1.0},
+    "instrument_kind": {"present_in_source": True, "supported": True, "evidence": "Post-Money SAFE", "confidence": 1.0},
+    "pro_rata_rights": {"present_in_source": False, "supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
+    "mfn_clause": {"present_in_source": False, "supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
+    "conversion_trigger": {"present_in_source": False, "supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
+    "document_date": {"present_in_source": False, "supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0},
 }
 
 
 # --- Unit tests for helpers -----------------------------------------------
 
 def test_aggregate_confidence_all_critical_present_full():
-    per_field = {"a": {"confidence": 1.0}, "b": {"confidence": 1.0}}
+    per_field = {"a": {"confidence": 1.0, "counts": True}, "b": {"confidence": 1.0, "counts": True}}
     assert _aggregate_confidence(per_field, ["a", "b"], [], []) == 1.0
 
 
-def test_aggregate_confidence_missing_critical_reduces_score():
-    per_field = {"a": {"confidence": 1.0}}
-    assert _aggregate_confidence(per_field, ["a", "b"], [], []) == 0.5
+def test_aggregate_confidence_absent_field_does_not_penalize():
+    """A field with counts=False must be skipped, not counted as a miss."""
+    per_field = {
+        "a": {"confidence": 1.0, "counts": True},
+        "b": {"confidence": 0.0, "counts": False},
+    }
+    assert _aggregate_confidence(per_field, ["a", "b"], [], []) == 1.0
 
 
 def test_aggregate_confidence_zero_denominator_returns_zero():
@@ -136,9 +140,9 @@ def test_aggregate_confidence_zero_denominator_returns_zero():
 
 def test_aggregate_confidence_weighted_scheme():
     per_field = {
-        "crit": {"confidence": 1.0},
-        "std": {"confidence": 0.5},
-        "opt": {"confidence": 0.0},
+        "crit": {"confidence": 1.0, "counts": True},
+        "std": {"confidence": 0.5, "counts": True},
+        "opt": {"confidence": 0.0, "counts": True},
     }
     expected = round(1.3 / 1.9, 3)
     assert _aggregate_confidence(per_field, ["crit"], ["std"], ["opt"]) == expected
@@ -146,17 +150,30 @@ def test_aggregate_confidence_weighted_scheme():
 
 def test_merge_supported_field_takes_min_confidence():
     extracted = {"a": {"value": 1, "confidence": 0.9}}
-    verified = {"a": {"supported": True, "confidence": 0.7}}
+    verified = {"a": {"present_in_source": True, "supported": True, "confidence": 0.7}}
     merged = _merge(extracted, verified)
     assert merged["a"]["value"] == 1
     assert merged["a"]["confidence"] == 0.7
+    assert merged["a"]["counts"] is True
 
 
 def test_merge_unsupported_field_zeroes_confidence():
     extracted = {"a": {"value": 1, "confidence": 0.9}}
-    verified = {"a": {"supported": False, "confidence": 0.0}}
+    verified = {"a": {"present_in_source": True, "supported": False, "confidence": 0.0}}
     merged = _merge(extracted, verified)
+    assert merged["a"]["value"] is None
     assert merged["a"]["confidence"] == 0.0
+    assert merged["a"]["counts"] is True
+
+
+def test_merge_absent_field_does_not_count():
+    """A field the source doesn't mention must be excluded from the score."""
+    extracted = {"a": {"value": None, "confidence": 0.0}}
+    verified = {"a": {"present_in_source": False, "supported": False, "confidence": 0.0}}
+    merged = _merge(extracted, verified)
+    assert merged["a"]["value"] is None
+    assert merged["a"]["confidence"] == 0.0
+    assert merged["a"]["counts"] is False
 
 
 def test_merge_missing_verification_zeroes_confidence():
@@ -223,7 +240,7 @@ def test_extract_with_llm_low_confidence_routes_to_review(monkeypatch):
     }
     fake = _FakeClient([
         json.dumps(weak_extract),
-        json.dumps({k: {"supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0}
+        json.dumps({k: {"present_in_source": True, "supported": False, "evidence": "NO EVIDENCE", "confidence": 0.0}
                     for k in EXTRACT_RESPONSE}),
     ])
     monkeypatch.setattr(
@@ -257,6 +274,7 @@ def test_extract_with_llm_handles_human_date_format(monkeypatch):
     }
     verify = dict(VERIFY_RESPONSE)
     verify["document_date"] = {
+        "present_in_source": True,
         "supported": True,
         "evidence": "January 16, 2023",
         "confidence": 0.9,
