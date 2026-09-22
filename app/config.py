@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Assistant uses a non-reasoning instruction-tuned model.
     # Reasoning models dump chain-of-thought into the response body.
     openrouter_assistant_model: str = (
-        "meta-llama/llama-3.3-70b-instruct:free"
+        "google/gemma-4-31b-it:free"
     )
 
     # Which LLM backend to prefer when both keys are set: "anthropic" | "openrouter"
