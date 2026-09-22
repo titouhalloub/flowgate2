@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     openrouter_classification_model: str = (
         "nvidia/nemotron-3-super-120b-a12b:free"
     )
+    # Assistant uses a non-reasoning instruction-tuned model.
+    # Reasoning models dump chain-of-thought into the response body.
+    openrouter_assistant_model: str = (
+        "meta-llama/llama-3.3-70b-instruct:free"
+    )
 
     # Which LLM backend to prefer when both keys are set: "anthropic" | "openrouter"
     llm_backend_preference: str = "openrouter"

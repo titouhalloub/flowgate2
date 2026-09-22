@@ -57,7 +57,13 @@ def _load_knowledge_base() -> str:
     return _knowledge_cache
 
 
-_SYSTEM_PROMPT = """You are the Flowgate Assistant. You answer questions \
+_SYSTEM_PROMPT = """
+CRITICAL OUTPUT RULES: Output ONLY the final answer. No reasoning,
+no analysis, no preamble, no step-by-step narration. Do not restate
+the question. Do not explain what you are about to say. If the answer
+is not in the provided context, say exactly: "I don't have that in my
+knowledge base." Two sentences maximum.
+You are the Flowgate Assistant. You answer questions \
 about how the Flowgate application works -- its compliance engine, its \
 cap-table model, its document pipeline, its convertibles and priced \
 rounds, its capital calls, its vesting and 409A features.
@@ -107,7 +113,7 @@ def _ask_llm(system: str, user: str) -> str:
     elif settings.openrouter_api_key:
         api_key = settings.openrouter_api_key
         base_url = settings.openrouter_base_url
-        model = settings.openrouter_model
+        model = settings.openrouter_assistant_model
     elif settings.anthropic_api_key:
         api_key = settings.anthropic_api_key
         base_url = "https://api.anthropic.com/v1"
