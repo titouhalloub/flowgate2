@@ -133,6 +133,7 @@ def extract_with_llm(text: str, document_type: str) -> "ExtractionOutcome | None
 
     try:
         merged = _merge(extracted, verified)
+        merged = _fix_currency_if_applicable(merged, text, schema_class)
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM merge raised: %s", exc)
         return None
