@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     classification_min_confidence: float = 0.75
     extraction_min_confidence: float = 0.85
 
-    extraction_llm_min_confidence: float = 0.80
+    extraction_llm_min_confidence: float = 0.70
     # --- Langfuse observability ---------------------------------------------
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
