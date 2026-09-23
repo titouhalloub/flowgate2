@@ -5,6 +5,7 @@ import {
   DocumentType,
   ShariahReviewStatus,
 } from '../types';
+import * as liveApi from '../services/api';
 import {
   SAMPLE_DOCUMENTS,
   classifyDocument,
@@ -42,6 +43,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
   const [complianceMode, setComplianceMode] = useState<ComplianceMode>('islamic');
   const [activeInputTab, setActiveInputTab] = useState<'paste' | 'upload'>('paste');
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeStep, setActiveStep] = useState<number>(0);
@@ -54,6 +56,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
     setDocText(item.text);
     setComplianceMode(item.mode);
     setUploadedFileName(null);
+    setUploadedFile(null);
     setHasAttachedFatwa(false);
   };
 
@@ -61,133 +64,144 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadedFileName(file.name);
+    setUploadedFile(file);
+
+    // Binary formats (PDF, images) go to the backend verbatim so the
+    // server can run pdfplumber / OCR. Reading them as text produces
+    // the raw PDF header and breaks classification.
+    const isBinary =
+      file.type === 'application/pdf' ||
+      file.type.startsWith('image/') ||
+      file.name.toLowerCase().endsWith('.pdf');
+
+    if (isBinary) {
+      setDocText(`[binary file: ${file.name}]`);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      if (content) {
-        setDocText(content);
-      }
+      if (content) setDocText(content);
     };
     reader.readAsText(file);
   };
 
-  const runPipeline = async (forceWithFatwa = false) => {
+  const runPipeline = async (_forceWithFatwa = false) => {
     setIsProcessing(true);
+    setActiveStep(1);
     const startTime = performance.now();
 
-    // Step 1: Classification
-    setActiveStep(1);
-    await new Promise((r) => setTimeout(r, 260));
-    const classification = classifyDocument(docText);
-
-    // Step 2: Extraction
-    setActiveStep(2);
-    await new Promise((r) => setTimeout(r, 340));
-    const fields = extractFields(docText, classification.docType);
-
-    // Step 3: Compliance Gateway
-    setActiveStep(3);
-    await new Promise((r) => setTimeout(r, 400));
-    const fatwaEffective = forceWithFatwa || hasAttachedFatwa;
-    const { findings, outcome } = evaluateCompliance(
-      complianceMode,
-      classification.docType,
-      fields,
-      fatwaEffective
-    );
-
-    // Step 4: Ledger append
-    setActiveStep(4);
-    await new Promise((r) => setTimeout(r, 200));
-    const duration = ((performance.now() - startTime) / 1000).toFixed(2);
-    setElapsedTime(`${duration}s`);
-
-    const traceId = generateTraceId();
-    const docId = 'doc_' + Math.random().toString(36).substring(2, 9);
-    const instrumentId = 'inst_' + Math.random().toString(36).substring(2, 9);
-
-    const mapToTxType = (dt: DocumentType) => {
-      if (dt === 'sukuk_certificate') return 'sukuk';
-      if (dt === 'loan_agreement') return 'loan';
-      if (dt === 'limited_partnership_agreement') return 'fund_interest';
-      return 'equity';
-    };
-
-    const result: PipelineRunResult = {
-      instrument: {
-        id: instrumentId,
-        issuer_name: (fields.find((f) => f.name === 'issuer_name')?.value as string) || 'Global Issuer Corp',
-        transaction_type: mapToTxType(classification.docType),
-        compliance_mode: complianceMode,
-        amount: (fields.find((f) => f.name === 'total_issuance' || f.name === 'principal_amount')?.value as number) || 5000000,
-        currency: 'USD',
-        shariah_review_status: outcome,
-        created_at: new Date().toISOString(),
-      },
-      document: {
-        id: docId,
-        instrument_id: instrumentId,
-        filename: uploadedFileName || `${selectedTemplate.toLowerCase().replace(/[^a-z0-9]/g, '_')}.txt`,
-        document_type: classification.docType,
-        confidence: classification.confidence,
-        status: classification.confidence >= 0.75 ? 'processed' : 'review_needed',
-        extracted_text: docText,
-        created_at: new Date().toISOString(),
-      },
-      extracted_fields: fields,
-      compliance_findings: findings,
-      compliance_outcome: outcome,
-      ledger_entries: [
-        {
-          id: 'led_' + Math.random().toString(36).substring(2, 9),
-          entry_type: 'document_result',
-          trace_id: traceId,
-          instrument_id: instrumentId,
-          title: `Document Processed: ${classification.docType} (confidence ${(classification.confidence * 100).toFixed(0)}%)`,
-          details: {
-            filename: uploadedFileName || 'sample_input.txt',
-            field_count: fields.length,
-          },
-          timestamp: new Date().toISOString(),
-        },
-        {
-          id: 'led_' + Math.random().toString(36).substring(2, 9),
-          entry_type: 'compliance_event',
-          trace_id: traceId,
-          instrument_id: instrumentId,
-          title: `Compliance Decision: ${outcome}`,
-          details: {
-            mode: complianceMode,
-            findings_count: findings.length,
-            blocking_failures: findings.filter((f) => f.severity === 'blocking' && f.status === 'failed').length,
-          },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    };
-
-    // If subscription agreement, auto-create cap table proposal
-    if (classification.docType === 'subscription_agreement') {
-      const shareCountField = fields.find((f) => f.name === 'share_count');
-      const subscriberField = fields.find((f) => f.name === 'subscriber_name');
-      const sharePriceField = fields.find((f) => f.name === 'share_price');
-      const issuerField = fields.find((f) => f.name === 'issuer_name');
-
-      result.proposal_created = {
-        id: 'prop_' + Math.random().toString(36).substring(2, 9),
-        document_id: docId,
-        issuer_name: String(issuerField?.value || 'Flowgate Systems Inc.'),
-        holder_name: String(subscriberField?.value || 'Apex Horizon Growth Fund LP'),
-        share_count: typeof shareCountField?.value === 'number' ? shareCountField.value : 150000,
-        share_class: 'Common',
-        share_price: 12.5,
-        status: 'proposed',
-        created_at: new Date().toISOString(),
-      };
+    const base = liveApi.getApiBase().replace(/\/$/, '');
+    if (!base) {
+      alert('Backend not configured. Open the settings panel and set the API base URL.');
+      setIsProcessing(false);
+      setActiveStep(0);
+      return;
     }
 
-    setIsProcessing(false);
-    onPipelineCompleted(result);
+    try {
+      const headers = await liveApi.authHeaders();
+      const fileHeaders = await liveApi.authHeaders(false);
+
+      // ---- Step 1: create the instrument container -----------------------
+      const txType = complianceMode === 'islamic' ? 'sukuk' : 'loan';
+      const instRes = await fetch(`${base}/instruments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          transaction_type: txType,
+          compliance_mode: complianceMode,
+          issuer_name: 'Pending Issuer',
+          issuer_type: 'Corporate',
+          amount: 1000000,
+          currency: 'USD',
+        }),
+      });
+      if (!instRes.ok) {
+        const err = await instRes.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to create instrument (${instRes.status})`);
+      }
+      const instrument = await instRes.json();
+      setActiveStep(2);
+
+      // ---- Step 2: submit the document -----------------------------------
+      let docRun: any;
+      if (uploadedFile) {
+        const fd = new FormData();
+        fd.append('file', uploadedFile);
+        fd.append('filename', uploadedFile.name);
+        const docRes = await fetch(
+          `${base}/instruments/${instrument.id}/documents/upload`,
+          { method: 'POST', headers: fileHeaders, body: fd },
+        );
+        if (!docRes.ok) {
+          const err = await docRes.json().catch(() => ({}));
+          throw new Error(err.detail || `Upload failed (${docRes.status})`);
+        }
+        docRun = await docRes.json();
+      } else {
+        const docRes = await fetch(
+          `${base}/instruments/${instrument.id}/documents`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              text: docText,
+              filename: `${selectedTemplate.toLowerCase().replace(/[^a-z0-9]/g, '_')}.txt`,
+            }),
+          },
+        );
+        if (!docRes.ok) {
+          const err = await docRes.json().catch(() => ({}));
+          throw new Error(err.detail || `Submit failed (${docRes.status})`);
+        }
+        docRun = await docRes.json();
+      }
+      setActiveStep(3);
+
+      // ---- Step 3: fetch the ledger --------------------------------------
+      const ledgerRes = await fetch(
+        `${base}/instruments/${instrument.id}/ledger`,
+        { headers },
+      );
+      const ledger = ledgerRes.ok ? await ledgerRes.json() : [];
+
+      // ---- Step 4: cap-table proposal (best-effort) ----------------------
+      let proposal = null;
+      if (docRun?.document?.status === 'processed') {
+        try {
+          const propRes = await fetch(
+            `${base}/documents/${docRun.document.id}/cap-table-proposal`,
+            { method: 'POST', headers },
+          );
+          if (propRes.ok) proposal = await propRes.json();
+        } catch {
+          // Proposal is optional — a 400 here means the doc type does not
+          // seed a proposal. Do not fail the whole pipeline.
+        }
+      }
+
+      setActiveStep(4);
+      const duration = ((performance.now() - startTime) / 1000).toFixed(2);
+      setElapsedTime(`${duration}s`);
+
+      const result: PipelineRunResult = {
+        instrument: docRun.instrument || instrument,
+        document: docRun.document,
+        extracted_fields: docRun.extracted_fields || [],
+        compliance_findings: docRun.compliance_findings || [],
+        compliance_outcome: docRun.compliance_outcome || 'not_applicable',
+        ledger_entries: Array.isArray(ledger) ? ledger : [],
+        proposal_created: proposal || undefined,
+      };
+      onPipelineCompleted(result);
+    } catch (err: any) {
+      alert(err?.message || 'Pipeline failed.');
+      setActiveStep(0);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleAttachFatwaAndRecheck = () => {
