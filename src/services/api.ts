@@ -38,9 +38,28 @@ export function isLive(): boolean {
   return apiBase.length > 0;
 }
 
-export function authHeaders(json = true): Record<string, string> {
+let _jwtGetter: (() => Promise<string | null>) | null = null;
+
+export function setJwtGetter(fn: () => Promise<string | null>): void {
+  _jwtGetter = fn;
+}
+
+export async function authHeaders(json = true): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (json) headers['Content-Type'] = 'application/json';
+
+  if (_jwtGetter) {
+    try {
+      const token = await _jwtGetter();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+        return headers;
+      }
+    } catch {
+      // fall through to API key
+    }
+  }
+
   if (apiKey) headers['X-API-Key'] = apiKey;
   return headers;
 }
@@ -66,7 +85,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isForm = init.body instanceof FormData;
   const res = await fetch(`${cleanBase()}${path}`, {
     ...init,
-    headers: { ...authHeaders(!isForm), ...(init.headers || {}) },
+    headers: { ...(await authHeaders(!isForm)), ...(init.headers || {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

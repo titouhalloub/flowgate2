@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Code,
 } from 'lucide-react';
+import { UserButton } from '@clerk/clerk-react';
 
 interface ModernSidebarProps {
   activeTab: string;
@@ -112,6 +113,11 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
             </button>
           );
         })}
+      </div>
+
+      {/* Clerk UserButton */}
+      <div className="mb-4 flex items-center justify-center">
+        <UserButton afterSignOutUrl="/" />
       </div>
 
       {/* Bottom Settings Icon */}

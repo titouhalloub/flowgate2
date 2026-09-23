@@ -268,6 +268,15 @@ def health() -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 
 
+@app.get("/config", include_in_schema=False)
+def public_config() -> dict[str, str]:
+    """Public, unauthenticated. Supplies the Clerk publishable key to the
+    frontend at runtime -- Vite cannot bake it into the bundle because
+    Render provides environment variables at runtime, not build time."""
+    return {"clerk_publishable_key": settings.clerk_publishable_key}
+
+
+
 @app.post(
     "/instruments",
     response_model=InstrumentOut,

@@ -27,6 +27,8 @@ import {
 } from './services/flowgateEngine';
 import { Shield, Sparkles, AlertCircle, ExternalLink, Search, Bell, X } from 'lucide-react';
 import * as liveApi from './services/api';
+import { setJwtGetter } from './services/api';
+import { SignedIn, SignedOut, SignIn, useAuth } from '@clerk/clerk-react';
 
 // True when the backend actively REJECTED the request (4xx). These are
 // validation/compliance refusals (e.g. the 409A below-FMV gate), never
@@ -39,6 +41,21 @@ function isClientRejection(err: unknown): err is liveApi.ApiRequestError {
     err.status >= 400 &&
     err.status < 500
   );
+}
+
+function JwtBridge() {
+  const { getToken, isLoaded } = useAuth();
+  useEffect(() => {
+    if (!isLoaded) return;
+    setJwtGetter(async () => {
+      try {
+        return await getToken();
+      } catch {
+        return null;
+      }
+    });
+  }, [isLoaded, getToken]);
+  return null;
 }
 
 export default function App() {
@@ -563,7 +580,10 @@ export default function App() {
   const pendingCapitalCallCount = capitalCalls.filter((c) => c.status === 'pending_approval').length;
 
   return (
-    <div className="min-h-screen bg-[#F4F6FB] flex flex-row selection:bg-[#7048E8] selection:text-white font-sans">
+    <>
+      <SignedIn>
+        <JwtBridge />
+        <div className="min-h-screen bg-[#F4F6FB] flex flex-row selection:bg-[#7048E8] selection:text-white font-sans">
       {/* Left Vertical Modern Sidebar matching screenshot */}
       <ModernSidebar
         activeTab={activeTab}
@@ -827,5 +847,12 @@ export default function App() {
         <AssistantPanel issuerName={currentIssuerName} />
       </div>
     </div>
+      </SignedIn>
+      <SignedOut>
+        <div className="flex items-center justify-center min-h-screen bg-[#F4F6FB]">
+          <SignIn />
+        </div>
+      </SignedOut>
+    </>
   );
 }
