@@ -12,6 +12,7 @@ import {
   PricedRound,
   PricedRoundPreview,
   ProposalStatus,
+  InvestorPortfolio,
 } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -572,4 +573,12 @@ export async function createComplianceRule(
     body: JSON.stringify(payload),
   });
   return row as unknown as ComplianceRule;
+}
+
+export async function getInvestorPortfolio(
+  investorId: string,
+): Promise<InvestorPortfolio> {
+  return request<InvestorPortfolio>(
+    `/investors/${encodeURIComponent(investorId)}/portfolio`,
+  );
 }

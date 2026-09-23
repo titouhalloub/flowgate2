@@ -356,3 +356,40 @@ export interface ComplianceRuleCreatePayload {
   effective_from: string;
   created_by: string;
 }
+
+export interface PortfolioHoldingOut {
+  id: string;
+  investor_id: string;
+  instrument_id: string;
+  stake_amount: number;
+  ownership_percentage: number | null;
+  status: string;
+  acquired_at: string;
+}
+
+export interface PortfolioInstrumentOut {
+  id: string;
+  transaction_type: string;
+  compliance_mode: 'traditional' | 'islamic';
+  issuer_name: string;
+  amount: number;
+  currency: string;
+  shariah_contract_type: string | null;
+  shariah_review_status: string;
+  underlying_asset_description: string | null;
+  jurisdictions: string[];
+  created_at: string;
+}
+
+export interface PortfolioRow {
+  holding: PortfolioHoldingOut;
+  instrument: PortfolioInstrumentOut;
+}
+
+export interface InvestorPortfolio {
+  investor: Investor;
+  holdings: PortfolioRow[];
+  total_traditional_exposure: number;
+  total_islamic_exposure: number;
+  fund_count: number;
+}

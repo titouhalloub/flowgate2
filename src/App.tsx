@@ -743,11 +743,7 @@ export default function App() {
                   Back to Dashboard
                 </button>
               </div>
-              <InvestorPortfolioView
-                investors={investors}
-                snapshot={capTableSnapshot}
-                capitalCalls={capitalCalls}
-              />
+              <InvestorPortfolioView investors={investors} />
             </div>
           )}
 
