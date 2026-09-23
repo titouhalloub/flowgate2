@@ -89,6 +89,9 @@ class PipelineRunOut(BaseModel):
     instrument: InstrumentOut
     outcome: ShariahReviewStatus
     routed_to_review: bool
+    # Populated when the document processed; empty on routed/aborted paths.
+    extracted_fields: list[dict[str, Any]] = []
+    compliance_findings: list[dict[str, Any]] = []
 
 
 class PipelineUploadOut(PipelineRunOut):

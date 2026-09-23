@@ -373,6 +373,8 @@ def submit_document(
         instrument=InstrumentOut.model_validate(instrument),
         outcome=result.outcome,
         routed_to_review=result.routed,
+        extracted_fields=getattr(result, "extracted_fields", []) or [],
+        compliance_findings=getattr(result, "compliance_findings", []) or [],
     )
 
 
@@ -449,6 +451,8 @@ def upload_document(
         instrument=InstrumentOut.model_validate(instrument),
         outcome=result.outcome,
         routed_to_review=result.routed,
+        extracted_fields=getattr(result, "extracted_fields", []) or [],
+        compliance_findings=getattr(result, "compliance_findings", []) or [],
         extracted_text=text,
         pages_read=page_meta.get("pages_read"),
         pages_total=page_meta.get("pages_total"),
@@ -1703,6 +1707,21 @@ def create_cap_table_proposal(
                 detail="SAFE document did not produce a convertible proposal",
             )
         return proposal
+
+    # A fund subscription agreement carries fund-side fields
+    # (fund_name/investor_name/commitment_amount) rather than share
+    # issuance fields, so it cannot seed a cap-table proposal. Return a
+    # specific message so the UI can explain why no proposal appeared.
+    if schema_name == "SubscriptionAgreementExtraction":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This document was classified as a fund subscription "
+                "agreement. Cap-table proposals are only generated for "
+                "equity subscriptions (EquitySubscriptionExtraction). "
+                "No proposal was created."
+            ),
+        )
 
     if schema_name != "EquitySubscriptionExtraction":
         raise HTTPException(

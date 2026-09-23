@@ -24,12 +24,25 @@ from app.telemetry import get_tracer
 
 
 class PipelineResult:
-    def __init__(self, document, class_conf, extract_conf, outcome, routed):
+    def __init__(
+        self,
+        document,
+        class_conf,
+        extract_conf,
+        outcome,
+        routed,
+        extracted_fields=None,
+        compliance_findings=None,
+    ):
         self.document = document
         self.classconf = class_conf
         self.extractconf = extract_conf
         self.outcome = outcome
         self.routed = routed
+        # Frontend-facing lists. Empty on routed/aborted paths; populated
+        # on the processed path so the UI can render without a second call.
+        self.extracted_fields = extracted_fields or []
+        self.compliance_findings = compliance_findings or []
 
     def __repr__(self):
         return (f"<PipelineResult doc={self.document.id} "
@@ -322,5 +335,26 @@ def process_document(session: Session, instrument: Instrument,
     trace.finish({"status": "processed",
                   "outcome": decision.outcome.value})
     trace.emit()
+    # Normalize the extraction into the frontend's {name, value} shape
+    # and serialize the compliance findings so the UI can render both
+    # without a second round-trip.
+    _data = (outcome.extracted_data or {}).get("data", {}) if outcome.extracted_data else {}
+    _fields = [
+        {"name": k, "value": v}
+        for k, v in _data.items()
+        if k not in ("schema_name", "schema_version", "extracted_at", "source_text")
+    ]
+    _findings = []
+    for _f in getattr(decision, "findings", []) or []:
+        _sev = getattr(_f, "severity", None)
+        _findings.append({
+            "code": getattr(_f, "code", ""),
+            "severity": _sev.value if hasattr(_sev, "value") else str(_sev or ""),
+            "message": getattr(_f, "message", ""),
+            "detail": getattr(_f, "detail", {}) or {},
+        })
+
     return PipelineResult(doc, classification.confidence, outcome.confidence,
-                          decision.outcome, False)
+                          decision.outcome, False,
+                          extracted_fields=_fields,
+                          compliance_findings=_findings)
