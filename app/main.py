@@ -85,6 +85,7 @@ from app.captable import (
 )
 from app.compliance import ComplianceGateway, load_rule_sets
 from app.config import settings
+from app.export import router as export_router
 from app.auth import require_user as require_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
@@ -135,12 +136,10 @@ from app.transfer_rules import (
     validate_rule_condition,
 )
 
-
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     init_db()
     yield
-
 
 def _maybe_create_convertible_proposal(session, document, instrument):
     """If this document is a successful SAFE extraction, create a pending
@@ -198,7 +197,6 @@ def _maybe_create_convertible_proposal(session, document, instrument):
     session.commit()
     return proposal
 
-
 app = FastAPI(
     title="Flowgate API",
     description="Unified private-capital pipeline: classification, extraction, "
@@ -226,16 +224,11 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("flowgate.409a")
 
-
 @app.get("/")
 def root() -> FileResponse:
     """Serve the React app at the root URL, falling back to the legacy demo."""
     index = _static_dir / "index.html"
     return FileResponse(str(index))
-
-
-
-
 
 # --------------------------------------------------------------------------- #
 # Auth -- a real, if minimal, gate. Not full OAuth, but not a fully open
@@ -243,7 +236,6 @@ def root() -> FileResponse:
 # --------------------------------------------------------------------------- #
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
 
 # require_api_key is imported from app.auth (Phase 3).
 # The old implementation only accepted X-API-Key; the new one
@@ -253,11 +245,9 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
-
 # --------------------------------------------------------------------------- #
 # Instruments
 # --------------------------------------------------------------------------- #
-
 
 @app.get("/config", include_in_schema=False)
 def public_config() -> dict[str, str]:
@@ -265,8 +255,6 @@ def public_config() -> dict[str, str]:
     frontend at runtime -- Vite cannot bake it into the bundle because
     Render provides environment variables at runtime, not build time."""
     return {"clerk_publishable_key": settings.clerk_publishable_key}
-
-
 
 @app.post(
     "/instruments",
@@ -296,7 +284,6 @@ def create_instrument(
     session.refresh(instrument)
     return instrument
 
-
 @app.get(
     "/instruments/{instrument_id}",
     response_model=InstrumentOut,
@@ -311,7 +298,6 @@ def get_instrument(
     if instrument is None:
         raise HTTPException(status_code=404, detail=f"Instrument {instrument_id!r} not found")
     return instrument
-
 
 @app.get(
     "/instruments/{instrument_id}/ledger",
@@ -335,7 +321,6 @@ def get_instrument_ledger(
 # --------------------------------------------------------------------------- #
 # Documents -- the actual pipeline entry point
 # --------------------------------------------------------------------------- #
-
 
 @app.post(
     "/instruments/{instrument_id}/documents",
@@ -376,7 +361,6 @@ def submit_document(
         extracted_fields=getattr(result, "extracted_fields", []) or [],
         compliance_findings=getattr(result, "compliance_findings", []) or [],
     )
-
 
 @app.post(
     "/instruments/{instrument_id}/documents/upload",
@@ -458,7 +442,6 @@ def upload_document(
         pages_total=page_meta.get("pages_total"),
     )
 
-
 @app.post(
     "/instruments/{instrument_id}/evidence",
     response_model=DocumentOut,
@@ -507,11 +490,9 @@ def submit_evidence_document(
     session.refresh(document)
     return document
 
-
 # --------------------------------------------------------------------------- #
 # Human review -- the only path to SCHOLAR_APPROVED / SCHOLAR_REJECTED
 # --------------------------------------------------------------------------- #
-
 
 @app.post(
     "/instruments/{instrument_id}/review",
@@ -540,7 +521,6 @@ def review_instrument(
 # Cap table -- the live cap-table demo panel
 # --------------------------------------------------------------------------- #
 
-
 @app.post(
     "/investors",
     response_model=InvestorOut,
@@ -563,7 +543,6 @@ def create_investor(
     session.refresh(investor)
     return investor
 
-
 @app.get(
     "/investors",
     response_model=list[InvestorOut],
@@ -580,12 +559,10 @@ def list_investors(
         session.execute(select(Investor).order_by(Investor.name)).scalars().all()
     )
 
-
 # --------------------------------------------------------------------------- #
 # Cross-fund portfolio -- one investor's holdings across many funds and both
 # compliance tracks, unified in a single response.
 # --------------------------------------------------------------------------- #
-
 
 @app.post(
     "/instruments/{instrument_id}/holdings",
@@ -623,7 +600,6 @@ def create_holding(
     session.commit()
     session.refresh(holding)
     return holding
-
 
 @app.get(
     "/investors/{investor_id}/portfolio",
@@ -676,7 +652,6 @@ def get_investor_portfolio(
         fund_count=len(seen_instruments),
     )
 
-
 @app.post(
     "/securities",
     response_model=SecurityOut,
@@ -700,7 +675,6 @@ def create_security(
     session.commit()
     session.refresh(security)
     return security
-
 
 @app.post(
     "/cap-table-events",
@@ -909,7 +883,6 @@ def record_cap_table_event(
 
     return event
 
-
 @app.get(
     "/cap-table/{issuer_name}",
     response_model=CapTableOut,
@@ -1019,7 +992,6 @@ def get_cap_table(
         ),
     )
 
-
 # ---------------------------------------------------------------------------
 # 409A valuations -- record-keeping for issuer fair market value
 # (CAPTABLE-ROADMAP-FEATURES.md Feature 2)
@@ -1029,13 +1001,11 @@ def get_cap_table(
 # latest-valuation read and the cap table -- never a hard block.
 _STALE_AFTER_MONTHS = 12.0
 
-
 def _months_old(valuation_date: datetime, ref: datetime) -> float:
     """Age of a valuation in (average) months, naive/aware safe."""
     a = valuation_date if valuation_date.tzinfo else valuation_date.replace(tzinfo=timezone.utc)
     b = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
     return max(0.0, (b - a).days / 30.4375)
-
 
 @app.post(
     "/valuations",
@@ -1062,7 +1032,6 @@ def record_valuation(
     session.refresh(valuation)
     return valuation
 
-
 @app.get(
     "/valuations/{issuer_name}",
     response_model=list[ValuationOut],
@@ -1084,7 +1053,6 @@ def list_valuations(
     if valuation_type is not None:
         stmt = stmt.where(Valuation.valuation_type == ValuationType(valuation_type))
     return list(session.execute(stmt).scalars().all())
-
 
 @app.get(
     "/valuations/{issuer_name}/latest",
@@ -1137,12 +1105,10 @@ def latest_valuation(
         months_old=round(months_old, 1),
     )
 
-
 # ---------------------------------------------------------------------------
 # Convertibles (outstanding SAFEs) + priced-round conversion preview
 # (CAPTABLE-ROADMAP Piece 3, Phase 3.4)
 # ---------------------------------------------------------------------------
-
 
 @app.post(
     "/convertibles",
@@ -1175,7 +1141,6 @@ def create_convertible(
     session.refresh(convertible)
     return convertible
 
-
 @app.get(
     "/convertibles/{issuer_name}",
     response_model=list[ConvertibleOut],
@@ -1197,7 +1162,6 @@ def list_convertibles(
     if status is not None:
         stmt = stmt.where(Convertible.status == status)
     return list(session.execute(stmt).scalars().all())
-
 
 @app.post(
     "/priced-rounds/preview",
@@ -1252,7 +1216,6 @@ def preview_priced_round(
         conversions=conversions_out,
     )
 
-
 def _ensure_investor(session: Session, name: str) -> Investor:
     row = session.execute(
         select(Investor).where(Investor.name == name)
@@ -1264,7 +1227,6 @@ def _ensure_investor(session: Session, name: str) -> Investor:
         session.add(row)
         session.flush()
     return row
-
 
 def _ensure_security(
     session: Session,
@@ -1291,14 +1253,12 @@ def _ensure_security(
         session.flush()
     return row
 
-
 # ---------------------------------------------------------------------------
 # Priced-round commit (Phase 3.5): atomically records the round's preferred
 # issuance plus one CONVERSION event per outstanding post-money SAFE, flips
 # each convertible to CONVERTED, and writes one ledger entry per event --
 # all in a single transaction. Idempotent via client_request_id (R7).
 # ---------------------------------------------------------------------------
-
 
 def _priced_round_out(round_row: PricedRound, session: Session) -> PricedRoundOut:
     """Read model: the round plus the conversion summary rebuilt from its
@@ -1351,7 +1311,6 @@ def _priced_round_out(round_row: PricedRound, session: Session) -> PricedRoundOu
         total_conversion_shares=sum(c.shares_issued for c in conversions),
         conversions=conversions,
     )
-
 
 @app.post(
     "/priced-rounds",
@@ -1542,7 +1501,6 @@ def commit_priced_round(
     session.refresh(round_row)
     return _priced_round_out(round_row, session)
 
-
 @app.get(
     "/priced-rounds/{issuer_name}",
     response_model=list[PricedRoundOut],
@@ -1561,7 +1519,6 @@ def list_priced_rounds(
         ).scalars().all()
     )
     return [_priced_round_out(r, session) for r in rounds]
-
 
 @app.post(
     "/assistant/ask",
@@ -1586,7 +1543,6 @@ def assistant_ask(
         sources=result["sources"],
     )
 
-
 # ---------------------------------------------------------------------------
 # Document -> cap table proposal flow
 #
@@ -1605,7 +1561,6 @@ def assistant_ask(
 # auto-provisioned -- they stay None and the proposal carries a
 # subscriber_unresolved flag for the reviewer.
 # ---------------------------------------------------------------------------
-
 
 def _provisional_investor(
     session: Session, name: str
@@ -1626,7 +1581,6 @@ def _provisional_investor(
     session.add(investor)
     session.flush()  # id available for the event payload below
     return investor, True
-
 
 def _provisional_security(
     session: Session, issuer_name: str, security_type: str | None,
@@ -1658,7 +1612,6 @@ def _provisional_security(
     session.add(security)
     session.flush()
     return security, True
-
 
 @app.post(
     "/documents/{document_id}/cap-table-proposal",
@@ -1779,7 +1732,6 @@ def create_cap_table_proposal(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.refresh(proposal)
     return proposal
-
 
 @app.post(
     "/cap-table-proposals/{proposal_id}/approve",
@@ -1945,7 +1897,6 @@ def approve_cap_table_proposal(
     session.commit()
     return event
 
-
 @app.post(
     "/cap-table-proposals/{proposal_id}/link-investor",
     response_model=CapTableProposalOut,
@@ -2018,7 +1969,6 @@ def link_investor_to_proposal(
     session.refresh(proposal)
     return proposal
 
-
 @app.get(
     "/cap-table-proposals",
     response_model=list[CapTableProposalOut],
@@ -2048,7 +1998,6 @@ def list_cap_table_proposals(
         stmt = stmt.where(CapTableProposal.status == status_enum)
     stmt = stmt.order_by(CapTableProposal.created_at.desc()).limit(100)
     return list(session.execute(stmt).scalars().all())
-
 
 @app.post(
     "/cap-table-proposals/{proposal_id}/reject",
@@ -2099,7 +2048,6 @@ def reject_cap_table_proposal(
     session.refresh(proposal)
     return proposal
 
-
 # --------------------------------------------------------------------------- #
 # Capital calls -- approval parity (Phase A)
 #
@@ -2110,14 +2058,12 @@ def reject_cap_table_proposal(
 # unresolved call blocks with 409. Rejects never write event facts.
 # --------------------------------------------------------------------------- #
 
-
 capital_call_out_schema = CapitalCallOut
 
 # Half-a-cent tolerance for float money comparisons: a payment within this
 # distance of the remaining balance closes the call exactly once, and float
 # noise from summing 500000.00 + 250000.005-style rows cannot flip a state.
 _PAYMENT_TOLERANCE = 0.005
-
 
 def derive_payment_status(amount_due: float, total_paid: float) -> str:
     """unpaid / partial / paid, derived -- the single definition the API
@@ -2127,7 +2073,6 @@ def derive_payment_status(amount_due: float, total_paid: float) -> str:
     if total_paid + _PAYMENT_TOLERANCE >= amount_due:
         return "paid"
     return "partial"
-
 
 def _payment_sums(
     session: Session, call_ids: set[str]
@@ -2144,7 +2089,6 @@ def _payment_sums(
         .group_by(CapitalCallPayment.capital_call_id)
     ).all()
     return {row[0]: float(row[1]) for row in rows}
-
 
 def _capital_calls_out(
     session: Session, calls: list[CapitalCall]
@@ -2181,7 +2125,6 @@ def _capital_calls_out(
         out.payment_status = derive_payment_status(c.amount_due, paid)
         outs.append(out)
     return outs
-
 
 @app.post(
     "/instruments/{instrument_id}/capital-calls",
@@ -2237,7 +2180,6 @@ def create_capital_call(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.refresh(call)
     return _capital_calls_out(session, [call])[0]
-
 
 @app.post(
     "/capital-calls/{call_id}/review",
@@ -2317,7 +2259,6 @@ def review_capital_call(
     session.refresh(call)
     return _capital_calls_out(session, [call])[0]
 
-
 @app.get(
     "/capital-calls",
     response_model=list[CapitalCallOut],
@@ -2340,7 +2281,6 @@ def list_capital_calls(
     stmt = stmt.order_by(CapitalCall.created_at.desc())
     rows = session.execute(stmt).scalars().all()
     return _capital_calls_out(session, list(rows))
-
 
 @app.get(
     "/capital-calls/overdue",
@@ -2366,7 +2306,6 @@ def list_overdue_capital_calls(
     ).scalars().all()
     return _capital_calls_out(session, list(rows))
 
-
 # --------------------------------------------------------------------------- #
 # Capital-call payments -- Phase C reconciliation
 #
@@ -2375,7 +2314,6 @@ def list_overdue_capital_calls(
 # 409, never a write). Reconciled state (unpaid/partial/paid) is derived at
 # read time from sum(payments) vs amount_due -- see _capital_calls_out.
 # --------------------------------------------------------------------------- #
-
 
 @app.get(
     "/capital-calls/{call_id}/payments",
@@ -2397,7 +2335,6 @@ def list_capital_call_payments(
         .order_by(CapitalCallPayment.paid_date.asc())
     ).scalars().all()
     return [PaymentOut.model_validate(p) for p in rows]
-
 
 @app.post(
     "/capital-calls/{call_id}/payments",
@@ -2487,11 +2424,9 @@ def record_capital_call_payment(
     session.refresh(payment)
     return PaymentOut.model_validate(payment)
 
-
 # --------------------------------------------------------------------------- #
 # Compliance rules -- Phase 2.6 CRUD. Versioned, never deleted.               #
 # --------------------------------------------------------------------------- #
-
 
 @app.get(
     "/compliance/rules",
@@ -2545,7 +2480,6 @@ def list_compliance_rules(
         latest.append(row)
     return latest
 
-
 @app.get(
     "/compliance/rules/{package_name}/{rule_name}",
     response_model=list[ComplianceRuleOut],
@@ -2572,7 +2506,6 @@ def compliance_rule_history(
             detail=f"Rule {rule_name!r} not found in package {package_name!r}",
         )
     return list(rows)
-
 
 @app.post(
     "/compliance/rules",
@@ -2661,7 +2594,6 @@ def create_compliance_rule(
     session.refresh(new_rule)
     return new_rule
 
-
 @app.post(
     "/compliance/rules/{rule_id}/deactivate",
     response_model=ComplianceRuleOut,
@@ -2697,7 +2629,6 @@ def deactivate_compliance_rule(
     session.refresh(rule)
     return rule
 
-
 # --------------------------------------------------------------------------- #
 # Transfer rules / ROFR engine -- Phase D governance gate
 #
@@ -2707,7 +2638,6 @@ def deactivate_compliance_rule(
 # these routes manage the rules, the review queue, and the named-human
 # resolution. See PHASE-D-TRANSFER-RULES.md.
 # --------------------------------------------------------------------------- #
-
 
 @app.post(
     "/transfer-rules",
@@ -2772,7 +2702,6 @@ def create_transfer_rule(
     session.refresh(rule)
     return rule
 
-
 @app.get(
     "/transfer-rules",
     response_model=list[TransferRuleOut],
@@ -2790,7 +2719,6 @@ def list_transfer_rules(
         query = query.where(TransferRule.issuer_name == issuer_name)
     rows = session.execute(query).scalars().all()
     return [TransferRuleOut.model_validate(r) for r in rows]
-
 
 def _evaluation_overdue(
     session: Session, evaluation: TransferEvaluation
@@ -2824,7 +2752,6 @@ def _evaluation_overdue(
         if now - created > timedelta(days=rule.escalation_after_days):
             return True
     return False
-
 
 @app.get(
     "/transfer-evaluations",
@@ -2875,7 +2802,6 @@ def list_transfer_evaluations(
         for ev in rows
     ]
 
-
 # --------------------------------------------------------------------------- #
 # Transfer governance decisions (Phase D) -- resolving PENDING evaluations.   #
 #                                                                             #
@@ -2883,7 +2809,6 @@ def list_transfer_evaluations(
 # replay check as the normal path; reject writes nothing. Both refuse an      #
 # already-resolved evaluation (409) and require a named human reviewer.       #
 # --------------------------------------------------------------------------- #
-
 
 def _evaluation_out(
     session: Session, evaluation: TransferEvaluation
@@ -2904,7 +2829,6 @@ def _evaluation_out(
         created_at=evaluation.created_at,
         overdue=_evaluation_overdue(session, evaluation),
     )
-
 
 def _pending_evaluation_or_error(
     session: Session, evaluation_id: str
@@ -2928,7 +2852,6 @@ def _pending_evaluation_or_error(
             },
         )
     return evaluation
-
 
 @app.post(
     "/transfer-evaluations/{evaluation_id}/approve",
@@ -3017,7 +2940,6 @@ def approve_transfer_evaluation(
     session.refresh(evaluation)
     return _evaluation_out(session, evaluation)
 
-
 @app.post(
     "/transfer-evaluations/{evaluation_id}/reject",
     response_model=TransferEvaluationOut,
@@ -3065,9 +2987,11 @@ def reject_transfer_evaluation(
     session.refresh(evaluation)
     return _evaluation_out(session, evaluation)
 
+app.include_router(export_router)
 
 @app.get("/{path:path}")
 def spa_fallback(path: str) -> FileResponse:
     """Serve the React app for any unmatched route (SPA client-side routing)."""
     index = _static_dir / "index.html"
     return FileResponse(str(index))
+
