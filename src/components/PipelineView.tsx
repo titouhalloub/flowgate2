@@ -101,14 +101,11 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
     }
 
     try {
-      const headers = await liveApi.authHeaders();
-      const fileHeaders = await liveApi.authHeaders(false);
-
       // ---- Step 1: create the instrument container -----------------------
       const txType = complianceMode === 'islamic' ? 'sukuk' : 'loan';
       const instRes = await fetch(`${base}/instruments`, {
         method: 'POST',
-        headers,
+        headers: await liveApi.authHeaders(),
         body: JSON.stringify({
           transaction_type: txType,
           compliance_mode: complianceMode,
@@ -133,7 +130,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
         fd.append('filename', uploadedFile.name);
         const docRes = await fetch(
           `${base}/instruments/${instrument.id}/documents/upload`,
-          { method: 'POST', headers: fileHeaders, body: fd },
+          { method: 'POST', headers: await liveApi.authHeaders(false), body: fd },
         );
         if (!docRes.ok) {
           const err = await docRes.json().catch(() => ({}));
@@ -145,7 +142,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
           `${base}/instruments/${instrument.id}/documents`,
           {
             method: 'POST',
-            headers,
+            headers: await liveApi.authHeaders(),
             body: JSON.stringify({
               text: docText,
               filename: `${selectedTemplate.toLowerCase().replace(/[^a-z0-9]/g, '_')}.txt`,
@@ -161,9 +158,11 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
       setActiveStep(3);
 
       // ---- Step 3: fetch the ledger --------------------------------------
+      // Fresh authHeaders() call: extraction can take minutes, and any
+      // token cached at the start of the pipeline is expired by now.
       const ledgerRes = await fetch(
         `${base}/instruments/${instrument.id}/ledger`,
-        { headers },
+        { headers: await liveApi.authHeaders() },
       );
       const ledger = ledgerRes.ok ? await ledgerRes.json() : [];
 
@@ -173,12 +172,11 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
         try {
           const propRes = await fetch(
             `${base}/documents/${docRun.document.id}/cap-table-proposal`,
-            { method: 'POST', headers },
+            { method: 'POST', headers: await liveApi.authHeaders() },
           );
           if (propRes.ok) proposal = await propRes.json();
         } catch {
-          // Proposal is optional — a 400 here means the doc type does not
-          // seed a proposal. Do not fail the whole pipeline.
+          // Proposal is optional
         }
       }
 
@@ -186,12 +184,25 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
       const duration = ((performance.now() - startTime) / 1000).toFixed(2);
       setElapsedTime(`${duration}s`);
 
+      // Normalize the document record. The backend exposes confidence under
+      // classification_confidence / extraction_confidence; the UI reads
+      // `.confidence`.
+      const rawDoc = docRun.document ?? {};
+      const document = {
+        ...rawDoc,
+        confidence:
+          rawDoc.confidence ??
+          rawDoc.extraction_confidence ??
+          rawDoc.classification_confidence ??
+          0,
+      };
+
       const result: PipelineRunResult = {
         instrument: docRun.instrument || instrument,
-        document: docRun.document,
-        extracted_fields: docRun.extracted_fields || [],
-        compliance_findings: docRun.compliance_findings || [],
-        compliance_outcome: docRun.compliance_outcome || 'not_applicable',
+        document,
+        extracted_fields: docRun.extracted_fields || docRun.fields || [],
+        compliance_findings: docRun.compliance_findings || docRun.findings || [],
+        compliance_outcome: docRun.compliance_outcome || docRun.outcome || 'not_applicable',
         ledger_entries: Array.isArray(ledger) ? ledger : [],
         proposal_created: proposal || undefined,
       };

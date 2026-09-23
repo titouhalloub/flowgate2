@@ -44,6 +44,27 @@ export function setJwtGetter(fn: () => Promise<string | null>): void {
   _jwtGetter = fn;
 }
 
+// Treat a JWT as expired when its `exp` claim falls inside this window.
+// Clerk tokens are short-lived; document extraction can take minutes, so
+// any token minted at the start of a pipeline is dead by the time the
+// ledger fetch runs. Falling back to the API key when the JWT is close
+// to expiry prevents 401s on long-running requests.
+const JWT_REFRESH_WINDOW_MS = 30_000;
+
+function isJwtExpired(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '==='.slice((b64.length + 3) % 4);
+    const payload = JSON.parse(atob(padded));
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 < Date.now() + JWT_REFRESH_WINDOW_MS;
+  } catch {
+    return true;
+  }
+}
+
 export async function authHeaders(json = true): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (json) headers['Content-Type'] = 'application/json';
@@ -51,7 +72,7 @@ export async function authHeaders(json = true): Promise<Record<string, string>> 
   if (_jwtGetter) {
     try {
       const token = await _jwtGetter();
-      if (token) {
+      if (token && !isJwtExpired(token)) {
         headers['Authorization'] = `Bearer ${token}`;
         return headers;
       }
