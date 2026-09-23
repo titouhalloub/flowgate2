@@ -585,7 +585,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                 <div className="space-y-2">
                   {lastResult.compliance_findings.map((finding) => (
                     <div
-                      key={finding.rule_id}
+                      key={finding.code}
                       className={`p-3.5 rounded-xl border text-xs transition-all ${
                         finding.status === 'passed'
                           ? 'bg-white border-emerald-100 shadow-2xs'
@@ -599,9 +599,9 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                           ) : (
                             <XCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
                           )}
-                          <span className="font-bold text-gray-900">{finding.name}</span>
+                          <span className="font-bold text-gray-900">{finding.message}</span>
                           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">
-                            {finding.rule_id}
+                            {finding.code}
                           </span>
                         </div>
                         <span
@@ -614,7 +614,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                           {finding.severity}
                         </span>
                       </div>
-                      <p className="text-[11px] text-gray-600 pl-6">{finding.summary}</p>
+                      <p className="text-[11px] text-gray-600 pl-6">{finding.message}</p>
                       {finding.remedy && (
                         <p className="text-[11px] text-amber-800 pl-6 mt-1 bg-amber-100/50 p-2 rounded-lg border border-amber-200">
                           <strong>Remedy:</strong> {finding.remedy}
