@@ -35,6 +35,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -978,3 +979,28 @@ class PricedRound(Base):
             f"<PricedRound issuer={self.issuer_name!r} "
             f"round={self.round_name} price={self.price_per_share}>"
         )
+
+class User(Base):
+    """A user of the Flowgate UI, authenticated via Clerk.
+
+    Clerk is the source of truth for identity (email, password, MFA,
+    sessions). This table stores the local role assignment and login
+    audit that Clerk does not track. ``external_auth_id`` is the
+    ``sub`` claim of the Clerk JWT.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    external_auth_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="viewer")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

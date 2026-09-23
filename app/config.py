@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     extraction_min_confidence: float = 0.85
 
     extraction_llm_min_confidence: float = 0.70
+
+    # --- Clerk (per-user identity for the UI) -------------------------------
+    # JWTs are RS256-signed; verification only needs the public JWKS endpoint.
+    # No secret key on the backend.
+    clerk_publishable_key: str = ""
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+
     # --- Langfuse observability ---------------------------------------------
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
