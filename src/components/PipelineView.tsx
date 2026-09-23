@@ -563,7 +563,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                         {String(f.value)}
                       </div>
                       <div className="text-[10px] text-[#7048E8] font-semibold mt-1">
-                        Confidence: {(f.confidence * 100).toFixed(0)}%
+                        Confidence: {((field as any).confidence ? ((field as any).confidence * 100).toFixed(0) + "%" : "—")}
                       </div>
                     </div>
                   ))}
