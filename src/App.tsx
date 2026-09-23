@@ -6,6 +6,7 @@ import { CapTableView } from './components/CapTableView';
 import { CapitalCallsView } from './components/CapitalCallsView';
 import { InvestorPortfolioView } from './components/InvestorPortfolioView';
 import { AuditLedgerView } from './components/AuditLedgerView';
+import { ExportButton } from './components/ExportButton';
 import { DocsView } from './components/DocsView';
 import { ComplianceRulesView } from './components/ComplianceRulesView';
 import { AssistantPanel } from './components/AssistantPanel';
@@ -781,12 +782,24 @@ export default function App() {
                     Immutable audit log of all document intake decisions, compliance checks, and cap table updates
                   </p>
                 </div>
-                <button
-                  onClick={() => setActiveTab('dashboard')}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#F4F6FC] hover:bg-[#EBE7FD] text-gray-700 hover:text-[#7048E8] border border-gray-200 transition-colors cursor-pointer"
-                >
-                  Back to Dashboard
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <ExportButton
+                    path="/export/ledger.csv"
+                    label="Export CSV"
+                    filename="flowgate-ledger.csv"
+                  />
+                  <ExportButton
+                    path="/export/ledger.xlsx"
+                    label="Export Excel"
+                    filename="flowgate-ledger.xlsx"
+                  />
+                  <button
+                    onClick={() => setActiveTab('dashboard')}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#F4F6FC] hover:bg-[#EBE7FD] text-gray-700 hover:text-[#7048E8] border border-gray-200 transition-colors cursor-pointer"
+                  >
+                    Back to Dashboard
+                  </button>
+                </div>
               </div>
               <AuditLedgerView ledgerEntries={ledgerEntries} />
             </div>
