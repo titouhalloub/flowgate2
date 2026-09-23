@@ -87,6 +87,7 @@ from app.compliance import ComplianceGateway, load_rule_sets
 from app.config import settings
 from app.export import router as export_router
 from app.webhook_routes import router as webhook_router
+from app.api_docs import router as api_docs_router
 from app.auth import require_user as require_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
@@ -2990,6 +2991,7 @@ def reject_transfer_evaluation(
 
 app.include_router(export_router)
 app.include_router(webhook_router)
+app.include_router(api_docs_router)
 
 @app.get("/{path:path}")
 def spa_fallback(path: str) -> FileResponse:
