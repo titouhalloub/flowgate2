@@ -666,4 +666,35 @@ class ComplianceRuleOut(BaseModel):
     created_at: datetime
 
 
+class WebhookSubscriptionCreate(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2048)
+    secret: str = Field(..., min_length=16, max_length=128)
+    events: list[str] = Field(default_factory=list)
+    description: str | None = None
+    created_by: str = Field(..., min_length=1, max_length=64)
 
+
+class WebhookSubscriptionOut(BaseModel):
+    id: str
+    url: str
+    events: list[str]
+    description: str | None
+    active: bool
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WebhookDeliveryOut(BaseModel):
+    id: str
+    subscription_id: str
+    event_type: str
+    status: str
+    attempts: int
+    response_status: int | None
+    last_error: str | None
+    created_at: datetime
+    delivered_at: datetime | None
+
+    model_config = {"from_attributes": True}

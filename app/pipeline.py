@@ -354,7 +354,15 @@ def process_document(session: Session, instrument: Instrument,
             "detail": getattr(_f, "detail", {}) or {},
         })
 
-    return PipelineResult(doc, classification.confidence, outcome.confidence,
-                          decision.outcome, False,
-                          extracted_fields=_fields,
-                          compliance_findings=_findings)
+    result = PipelineResult(doc, classification.confidence, outcome.confidence,
+                            decision.outcome, False,
+                            extracted_fields=_fields,
+                            compliance_findings=_findings)
+
+    try:
+        from app.webhooks import fire_pipeline_webhooks
+        fire_pipeline_webhooks(session, instrument, result)
+    except Exception:
+        pass
+
+    return result

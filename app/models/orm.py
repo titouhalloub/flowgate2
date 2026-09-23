@@ -1004,3 +1004,47 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class WebhookSubscription(Base):
+    # An outbound webhook subscriber.
+    # Events carry HMAC-SHA256 signatures over <timestamp>.<body>.
+    # Subscriptions are deactivated (active=False), never deleted.
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class WebhookDelivery(Base):
+    # One outbound delivery attempt.
+    # status: pending | success | failed.
+    # attempts counts HTTP requests made; last_error carries the failure.
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subscription_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("webhook_subscriptions.id"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    response_status: Mapped[int | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
