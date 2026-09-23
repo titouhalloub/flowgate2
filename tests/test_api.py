@@ -30,46 +30,69 @@ def test_health_needs_no_auth(client):
     assert client.get("/health").status_code == 200
 
 
-def test_auth_gate_fails_closed_when_no_keys_configured():
-    """The real auth dependency must fail closed (503) when no keys are
-    configured, or return 401 for an invalid key when keys ARE set."""
+def test_auth_gate_fails_closed_when_no_keys_configured(monkeypatch):
+    """The auth dependency fails closed: 503 when no keys are configured,
+    401 for an invalid key when keys ARE set."""
     from fastapi import HTTPException
+    from unittest.mock import MagicMock
 
-    from app.config import get_settings, settings
-    from app.main import require_api_key as real_require_api_key
+    from app import auth as auth_module
 
-    get_settings.cache_clear()
-    try:
-        if not settings.api_keys:
-            with pytest.raises(HTTPException) as exc_info:
-                real_require_api_key(key="anything")
-            assert exc_info.value.status_code == 503
-        else:
-            with pytest.raises(HTTPException) as exc_info:
-                real_require_api_key(key="wrong-key")
-            assert exc_info.value.status_code == 401
-    finally:
-        get_settings.cache_clear()
+    # Case A: empty allowlist -> 503.
+    monkeypatch.setattr(auth_module, "_api_keys", lambda: [])
+    with pytest.raises(HTTPException) as exc_info:
+        auth_module.require_user(
+            request=MagicMock(),
+            x_api_key="anything",
+            authorization=None,
+            session=MagicMock(),
+        )
+    assert exc_info.value.status_code == 503
+
+    # Case B: allowlist populated, key not in it -> 401.
+    monkeypatch.setattr(auth_module, "_api_keys", lambda: ["a-real-key"])
+    with pytest.raises(HTTPException) as exc_info:
+        auth_module.require_user(
+            request=MagicMock(),
+            x_api_key="an-invalid-key",
+            authorization=None,
+            session=MagicMock(),
+        )
+    assert exc_info.value.status_code == 401
 
 
 def test_auth_gate_rejects_wrong_key(monkeypatch):
     from fastapi import HTTPException
+    from unittest.mock import MagicMock
 
-    from app.config import settings
-    from app.main import require_api_key as real_require_api_key
+    from app import auth as auth_module
 
-    monkeypatch.setattr(settings, "api_keys", "correct-key")
+    monkeypatch.setattr(auth_module, "_api_keys", lambda: ["correct-key"])
     with pytest.raises(HTTPException) as exc_info:
-        real_require_api_key(key="wrong-key")
+        auth_module.require_user(
+            request=MagicMock(),
+            x_api_key="wrong-key",
+            authorization=None,
+            session=MagicMock(),
+        )
     assert exc_info.value.status_code == 401
 
 
 def test_auth_gate_accepts_correct_key(monkeypatch):
-    from app.config import settings
-    from app.main import require_api_key as real_require_api_key
+    from unittest.mock import MagicMock
 
-    monkeypatch.setattr(settings, "api_keys", "correct-key")
-    assert real_require_api_key(key="correct-key") == "correct-key"
+    from app import auth as auth_module
+
+    monkeypatch.setattr(auth_module, "_api_keys", lambda: ["correct-key"])
+    user = auth_module.require_user(
+        request=MagicMock(),
+        x_api_key="correct-key",
+        authorization=None,
+        session=MagicMock(),
+    )
+    # API-key path yields a synthetic admin identity.
+    assert user.role == "admin"
+    assert user.auth_method == "api_key"
 
 
 def test_full_sukuk_flow_blocks_then_pends_after_evidence(client):

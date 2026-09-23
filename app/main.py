@@ -85,6 +85,7 @@ from app.captable import (
 )
 from app.compliance import ComplianceGateway, load_rule_sets
 from app.config import settings
+from app.auth import require_user as require_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
     CapTableEventType,
@@ -244,19 +245,9 @@ def root() -> FileResponse:
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-def require_api_key(key: str | None = Security(_api_key_header)) -> str:
-    if not settings.api_keys:
-        # No keys configured: fail closed, not open. An empty allowlist
-        # should never silently mean "anyone can call this."
-        raise HTTPException(
-            status_code=503,
-            detail="No API keys configured on the server (A27_API_KEYS unset).",
-        )
-    valid_keys = {k.strip() for k in settings.api_keys.split(",") if k.strip()}
-    if not key or not any(secrets.compare_digest(key, k) for k in valid_keys):
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
-    return key
-
+# require_api_key is imported from app.auth (Phase 3).
+# The old implementation only accepted X-API-Key; the new one
+# accepts either X-API-Key or a Clerk JWT.
 
 @app.get("/health")
 def health() -> dict[str, str]:
