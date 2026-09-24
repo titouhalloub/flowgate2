@@ -75,7 +75,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
     { id: 'api-docs', label: 'API Documentation', icon: BookOpen, href: '/api-docs' },
   ];
 
-  const asideWidth = expanded ? 'w-56' : 'w-16 sm:w-20';
+  const asideWidth = expanded ? 'w-64' : 'w-16 sm:w-20';
 
   return (
     <aside
@@ -139,7 +139,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
               >
                 <Icon className="w-5 h-5 stroke-[2.2] flex-shrink-0" />
                 {expanded && (
-                  <span className="text-sm font-semibold whitespace-nowrap">
+                  <span className="text-sm font-semibold truncate min-w-0">
                     {item.label}
                   </span>
                 )}
@@ -169,7 +169,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
             >
               <Icon className="w-5 h-5 stroke-[2.2] flex-shrink-0" />
               {expanded && (
-                <span className="text-sm font-semibold whitespace-nowrap flex-1">
+                <span className="text-sm font-semibold truncate min-w-0 flex-1">
                   {item.label}
                 </span>
               )}
@@ -193,7 +193,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
       <div className={`${expanded ? 'mb-3 px-1' : 'mb-4'} flex ${expanded ? 'items-center gap-3' : 'justify-center'}`}>
         <UserButton afterSignOutUrl="/" />
         {expanded && (
-          <span className="text-sm font-semibold text-gray-500">Account</span>
+          <span className="text-sm font-semibold text-gray-500 truncate min-w-0">Account</span>
         )}
       </div>
 
@@ -209,7 +209,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
       >
         <Settings className="w-5 h-5 stroke-[2.2] flex-shrink-0" />
         {expanded && (
-          <span className="text-sm font-semibold whitespace-nowrap">
+          <span className="text-sm font-semibold truncate min-w-0">
             Settings & Repository
           </span>
         )}
