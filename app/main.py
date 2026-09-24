@@ -252,11 +252,26 @@ def health() -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/config", include_in_schema=False)
-def public_config() -> dict[str, str]:
+def public_config() -> dict:
     """Public, unauthenticated. Supplies the Clerk publishable key to the
     frontend at runtime -- Vite cannot bake it into the bundle because
-    Render provides environment variables at runtime, not build time."""
-    return {"clerk_publishable_key": settings.clerk_publishable_key}
+    Render provides environment variables at runtime, not build time.
+
+    Also reports which LLM backend is active and whether the demo free
+    tier is in use, so an operator can spot a misconfigured production
+    deployment at a glance. See MODEL-TIERS.md."""
+    _backend = settings.llm_backend_preference
+    _model = (
+        settings.openrouter_model
+        if _backend == "openrouter"
+        else settings.anthropic_model
+    )
+    return {
+        "clerk_publishable_key": settings.clerk_publishable_key,
+        "llm_backend": _backend,
+        "llm_model": _model,
+        "llm_is_free_tier": settings.llm_is_free_tier(),
+    }
 
 @app.post(
     "/instruments",

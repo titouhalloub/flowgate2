@@ -35,6 +35,26 @@ class Settings(BaseSettings):
     # Which LLM backend to prefer when both keys are set: "anthropic" | "openrouter"
     llm_backend_preference: str = "openrouter"
 
+    # ------------------------------------------------------------------
+    # LLM tier reporting
+    #
+    # Demo deployments use OpenRouter's free tier so a fresh checkout
+    # runs with no key. Production deployments run on paid models.
+    # This method reports which one is active -- it does not change
+    # behaviour. See MODEL-TIERS.md.
+    # ------------------------------------------------------------------
+
+    def llm_is_free_tier(self) -> bool:
+        backend = (self.llm_backend_preference or "").strip().lower()
+        if backend == "anthropic":
+            return not bool(self.anthropic_api_key)
+        if backend == "openrouter":
+            if not self.openrouter_api_key:
+                return True
+            return ":free" in (self.openrouter_model or "")
+        # Unknown backend: assume free until proven otherwise
+        return True
+
     classification_min_confidence: float = 0.75
     extraction_min_confidence: float = 0.85
 
