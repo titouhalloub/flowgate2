@@ -18,12 +18,13 @@ import {
   LatestValuation,
   LedgerEntry,
   PipelineRunResult,
+  CapTableSnapshot,
 } from './types';
 import {
   INITIAL_CAP_TABLE_EVENTS,
   INITIAL_CAPITAL_CALLS,
   INITIAL_INVESTORS,
-  computeCapTable,
+
   generateTraceId,
 } from './services/flowgateEngine';
 import { Shield, Sparkles, AlertCircle, ExternalLink, Search, Bell, X } from 'lucide-react';
@@ -159,10 +160,24 @@ export default function App() {
     },
   ]);
 
-  // Derived Event-Sourced Cap Table
-  const capTableSnapshot = useMemo(() => {
-    return computeCapTable(capTableEvents, currentIssuerName);
-  }, [capTableEvents, currentIssuerName]);
+  // Event-Sourced Cap Table -- fetched from the API so the backend
+  // is the single source of truth. Kimi review M2.
+  const [capTableSnapshot, setCapTableSnapshot] = useState<CapTableSnapshot | null>(null);
+  const [capTableRefreshKey, setCapTableRefreshKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    liveApi
+      .getCapTable(currentIssuerName)
+      .then((snapshot) => {
+        if (!cancelled) setCapTableSnapshot(snapshot);
+      })
+      .catch(() => {
+        if (!cancelled) setCapTableSnapshot(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentIssuerName, capTableRefreshKey]);
 
   // Handler: Pipeline Run Completed
   const handlePipelineCompleted = (result: PipelineRunResult) => {
@@ -280,6 +295,8 @@ export default function App() {
     }
 
     setCapTableEvents((prev) => [...prev, newEvent]);
+    // Trigger a re-fetch so the API's snapshot stays authoritative.
+    setCapTableRefreshKey((k) => k + 1);
 
     const entry: LedgerEntry = {
       id: 'led_' + Math.random().toString(36).substring(2, 9),
@@ -695,7 +712,7 @@ export default function App() {
               </div>
               <CapTableView
                 issuerName={currentIssuerName}
-                snapshot={capTableSnapshot}
+                snapshot={capTableSnapshot ?? { issuer_name: currentIssuerName, total_fully_diluted_shares: 0, positions: [], effective_date: new Date().toISOString() }}
                 events={capTableEvents}
                 proposals={proposals}
                 investors={investors}

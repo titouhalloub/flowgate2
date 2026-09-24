@@ -1,6 +1,7 @@
 import {
   AssistantAnswer,
   CapTableEvent,
+  CapTableSnapshot,
   CapTableProposal,
   CapitalCall,
   CapitalCallPayment,
@@ -621,4 +622,11 @@ export async function getInvestorPortfolio(
   return request<InvestorPortfolio>(
     `/investors/${encodeURIComponent(investorId)}/portfolio`,
   );
+}
+
+export async function getCapTable(issuerName: string): Promise<CapTableSnapshot> {
+  const row = await request<Record<string, unknown>>(
+    `/cap-table/${encodeURIComponent(issuerName)}`,
+  );
+  return row as unknown as CapTableSnapshot;
 }

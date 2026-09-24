@@ -144,6 +144,16 @@ export interface CapTableSnapshot {
   positions: HolderPosition[];
   grants?: GrantVesting[];
   effective_date: string;
+  // Optional fields the server sends that some panels ignore. Kept
+  // on the shape so a passthrough payload type-checks.
+  as_of?: string;
+  total_vested_shares?: number;
+  total_unvested_shares?: number;
+  shares_by_security?: Record<string, number>;
+  ownership_by_holder?: Record<string, number>;
+  latest_409a_price?: number | null;
+  latest_409a_date?: string | null;
+  latest_409a_stale?: boolean;
 }
 
 export interface LatestValuation {

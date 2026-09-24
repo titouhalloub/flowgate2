@@ -55,3 +55,24 @@ without help. A structured builder (key/value rows, or an
 evaluator-picker once the rule vocabulary stabilizes) is the eventual
 fix. Documented here so the textarea is not mistaken for a finished
 UX.
+
+## Client-side cap-table engine still used by FlowgateDashboard
+
+The cap-table snapshot for the Cap Table tab now comes from the API
+(`GET /cap-table/{issuer}`), so the backend is the single source of
+truth for that panel.
+
+`FlowgateDashboard.tsx` still calls `computeCapTable` from
+`src/services/flowgateEngine.ts` for its own demo mode (the
+`demoCompanySetup` toggle with `before`/`after` Series A views).
+That demo path is not connected to the API and operates on local
+sample events.
+
+To fully close this (the review's M2), either:
+- replace the demo mode with a fetch from the API for a demo issuer,
+- or delete the demo mode.
+
+Until then, two implementations of vesting math exist in the codebase.
+Any change to `app/captable.py`'s vesting math must be mirrored in
+`flowgateEngine.ts` in the same commit -- the pre-existing note above
+still applies to the FlowgateDashboard path.
