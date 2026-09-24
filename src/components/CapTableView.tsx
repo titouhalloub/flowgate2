@@ -9,7 +9,10 @@ import {
   CapTableEventType,
   LatestValuation,
 } from '../types';
-import { ApiRequestError, listConvertibles } from '../services/api';
+import {
+  ApiRequestError, listConvertibles,
+  listIssuers,
+} from '../services/api';
 import { PricedRoundModal } from './PricedRoundModal';
 import {
   PlusCircle,
@@ -81,6 +84,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
   onSwitchIssuer,
 }) => {
   const [showEventModal, setShowEventModal] = useState(false);
+  const [issuerOptions, setIssuerOptions] = useState<string[]>([]);
   const [reviewerName, setReviewerName] = useState('Sarah Jenkins (Legal VP)');
 
   // New Event Form State
@@ -152,6 +156,22 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
     // re-fires the fetch after a priced-round commit converts SAFEs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [issuerName, statusFilter, refreshKey]);
+
+  // Load distinct issuer names so the picker shows real options.
+  useEffect(() => {
+    let cancelled = false;
+    listIssuers()
+      .then((names) => {
+        if (!cancelled) setIssuerOptions(names);
+      })
+      .catch(() => {
+        // Silent: an empty list just means the user types the name.
+        if (!cancelled) setIssuerOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handlePricedRoundCommitted = () => {
     setIsModalOpen(false);
@@ -420,6 +440,7 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
         </label>
         <input
           type="text"
+          list="issuer-options"
           defaultValue={issuerName}
           onBlur={(e) => {
             const next = e.target.value.trim();
@@ -427,8 +448,14 @@ export const CapTableView: React.FC<CapTableViewProps> = ({
               onSwitchIssuer?.(next);
             }
           }}
+          placeholder="Type or pick an issuer"
           className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 font-mono outline-none focus:border-[#7048E8] w-64"
         />
+        <datalist id="issuer-options">
+          {issuerOptions.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
       </div>
 
       {/* Grid: Stakeholder Positions & Cap Table Proposals */}

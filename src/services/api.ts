@@ -630,3 +630,7 @@ export async function getCapTable(issuerName: string): Promise<CapTableSnapshot>
   );
   return row as unknown as CapTableSnapshot;
 }
+
+export async function listIssuers(): Promise<string[]> {
+  return request<string[]>('/issuers');
+}

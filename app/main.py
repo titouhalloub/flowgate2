@@ -3004,6 +3004,27 @@ def reject_transfer_evaluation(
     session.refresh(evaluation)
     return _evaluation_out(session, evaluation)
 
+@app.get("/issuers", response_model=list[str])
+def list_issuers(
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> list[str]:
+    """Distinct issuer names that currently exist. Used by the Cap Table
+    tab's issuer picker so a user can switch between real issuers without
+    typing an exact name."""
+    rows = (
+        session.execute(
+            select(Instrument.issuer_name)
+            .where(Instrument.issuer_name.isnot(None))
+            .distinct()
+            .order_by(Instrument.issuer_name)
+        )
+        .scalars()
+        .all()
+    )
+    return [r for r in rows if r]
+
+
 app.include_router(export_router)
 app.include_router(webhook_router)
 app.include_router(api_docs_router)
