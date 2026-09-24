@@ -1015,7 +1015,7 @@ class WebhookSubscription(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    secret: Mapped[str] = mapped_column(String(512), nullable=False)
     events: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     active: Mapped[bool] = mapped_column(default=True, nullable=False)

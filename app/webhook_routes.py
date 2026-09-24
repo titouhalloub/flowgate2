@@ -7,6 +7,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+import logging
+
 from app.api_schemas import (
     WebhookDeliveryOut,
     WebhookSubscriptionCreate,
@@ -15,6 +17,27 @@ from app.api_schemas import (
 from app.auth import require_user as require_api_key
 from app.db import get_session
 from app.models.orm import WebhookDelivery, WebhookSubscription
+
+logger = logging.getLogger(__name__)
+
+
+def _encrypt_secret(plain: str) -> str:
+    """Encrypt a webhook secret with the shared Fernet key.
+
+    Falls back to plaintext (with a warning) when
+    A27_DOCUMENT_ENCRYPTION_KEY is unset -- the webhook layer stays
+    usable in a demo deployment, but operators get a clear signal.
+    """
+    try:
+        from app.security import encrypt_pii
+        return encrypt_pii(plain)
+    except Exception as exc:
+        logger.warning(
+            "webhook secret stored in plaintext: %s "
+            "(set A27_DOCUMENT_ENCRYPTION_KEY to encrypt at rest)",
+            exc,
+        )
+        return plain
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -28,7 +51,7 @@ def create_webhook_subscription(
     sub = WebhookSubscription(
         id="whs_" + uuid4().hex,
         url=payload.url,
-        secret=payload.secret,
+        secret=_encrypt_secret(payload.secret),
         events=list(payload.events or []),
         description=payload.description,
         active=True,

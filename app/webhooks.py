@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 _DELIVERY_TIMEOUT_SECONDS = 5.0
 
 
+def _decrypt_secret(stored: str) -> str:
+    """Return the plaintext secret from a possibly-encrypted value.
+
+    Handles three cases: Fernet-encrypted (the current write path),
+    legacy plaintext (rows written before encryption existed), and
+    plaintext stored because A27_DOCUMENT_ENCRYPTION_KEY is unset.
+    """
+    if not stored:
+        return stored
+    try:
+        from app.security import decrypt_pii
+        return decrypt_pii(stored)
+    except Exception:
+        # Not a valid Fernet token -- treat as legacy plaintext.
+        return stored
+
+
 def _sign(secret: str, timestamp: int, body: bytes) -> str:
     payload = f"{timestamp}.".encode("utf-8") + body
     return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
@@ -32,7 +49,7 @@ def _sign(secret: str, timestamp: int, body: bytes) -> str:
 def _deliver_one(delivery: WebhookDelivery, subscription: WebhookSubscription) -> None:
     ts = int(time.time())
     body = json.dumps(delivery.payload, separators=(",", ":"), default=str).encode("utf-8")
-    signature = _sign(subscription.secret, ts, body)
+    signature = _sign(_decrypt_secret(subscription.secret), ts, body)
 
     headers = {
         "Content-Type": "application/json",
