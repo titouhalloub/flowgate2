@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
-from typing import Union
+from typing import Any, Union
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,7 +88,7 @@ from app.config import settings
 from app.export import router as export_router
 from app.webhook_routes import router as webhook_router
 from app.api_docs import router as api_docs_router
-from app.auth import require_user as require_api_key
+from app.auth import require_role, require_user as require_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
     CapTableEventType,
@@ -282,7 +282,7 @@ def public_config() -> dict:
 def create_instrument(
     payload: InstrumentCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Instrument:
     instrument = Instrument(
         id=str(uuid4()),
@@ -348,7 +348,7 @@ def submit_document(
     instrument_id: str,
     payload: DocumentSubmit,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> PipelineRunOut:
     instrument = session.get(Instrument, instrument_id)
     if instrument is None:
@@ -394,7 +394,7 @@ def upload_document(
     instrument_id: str,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> PipelineUploadOut:
     """Real-document intake: PDF / TXT / MD / HTML / image upload. The
     file's embedded text layer is read first; scans fall back to Tesseract
@@ -469,7 +469,7 @@ def submit_evidence_document(
     instrument_id: str,
     payload: EvidenceDocumentSubmit,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Document:
     """Attach a supporting document (fatwa, KYC, side letter) that the
     compliance gateway needs to see as evidence, without running it through
@@ -520,7 +520,7 @@ def review_instrument(
     instrument_id: str,
     payload: HumanReviewRequest,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Instrument:
     try:
         return submit_human_review_instrument(
@@ -547,7 +547,7 @@ def review_instrument(
 def create_investor(
     payload: InvestorCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Investor:
     investor = Investor(
         id=str(uuid4()),
@@ -591,7 +591,7 @@ def create_holding(
     instrument_id: str,
     payload: HoldingCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Holding:
     """Record an investor's stake in an instrument. Both sides must exist --
     no silent dangling references into the portfolio."""
@@ -678,7 +678,7 @@ def get_investor_portfolio(
 def create_security(
     payload: SecurityCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> SecurityModel:
     # Idempotent on (issuer_name, name). The frontend's Record Event
     # flow calls this endpoint on every click; without a dedupe here,
@@ -719,7 +719,7 @@ def create_security(
 def record_cap_table_event(
     payload: CapTableEventCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapTableEvent:
     # The event must reference securities (and, for exercise/conversion,
     # the target security) and holders that actually exist -- no silent
@@ -1046,7 +1046,7 @@ def _months_old(valuation_date: datetime, ref: datetime) -> float:
 def record_valuation(
     payload: ValuationCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer")),
 ) -> Valuation:
     valuation = Valuation(
         id=str(uuid4()),
@@ -1149,7 +1149,7 @@ def latest_valuation(
 def create_convertible(
     payload: ConvertibleCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Convertible:
     convertible = Convertible(
         id=str(uuid4()),
@@ -1201,7 +1201,7 @@ def list_convertibles(
 def preview_priced_round(
     payload: PricedRoundPreviewRequest,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> PricedRoundPreviewOut:
     """Compute what a priced round would convert for an issuer's outstanding
     SAFEs -- without persisting anything. The commit endpoint (Phase 3.5)
@@ -1352,7 +1352,7 @@ def commit_priced_round(
     payload: PricedRoundCreate,
     response: Response,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> PricedRoundOut:
     # 1. Idempotency: a retried commit returns the original round untouched.
     if payload.client_request_id:
@@ -1656,7 +1656,7 @@ def _provisional_security(
 def create_cap_table_proposal(
     document_id: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapTableProposal:
     """Prepare a cap-table issuance proposal from a processed document.
 
@@ -1776,7 +1776,7 @@ def approve_cap_table_proposal(
     proposal_id: str,
     reviewer: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> Union[CapTableEvent, Convertible]:
     """The human gate. Materializes the proposed issuance as a real
     CapTableEvent -- the ONLY path from an extracted document into the
@@ -1941,7 +1941,7 @@ def link_investor_to_proposal(
     investor_id: str,
     reviewer: str = "",
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapTableProposal:
     """Resolve an unresolved subscriber: attach a REAL investor to a pending
     proposal. This is the remedy the approval gate's 409 message promises --
@@ -2042,7 +2042,7 @@ def reject_cap_table_proposal(
     proposal_id: str,
     reviewer: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapTableProposal:
     """The other half of the human gate. A named reviewer rejects the
     proposal: nothing is written to the cap table, the proposal is marked
@@ -2166,7 +2166,7 @@ def create_capital_call(
     instrument_id: str,
     payload: CapitalCallCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapitalCallOut:
     """Create a capital call notice (extracted data) pending approval.
 
@@ -2224,7 +2224,7 @@ def review_capital_call(
     call_id: str,
     payload: CapitalCallReviewRequest,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> CapitalCallOut:
     """Named-reviewer approve/reject gate for a capital call.
 
@@ -2380,7 +2380,7 @@ def record_capital_call_payment(
     call_id: str,
     payload: PaymentCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> PaymentOut:
     """Record a payment received against an APPROVED capital call.
 
@@ -2550,7 +2550,7 @@ def compliance_rule_history(
 def create_compliance_rule(
     payload: ComplianceRuleCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer")),
 ) -> ComplianceRule:
     """Create a new version of a compliance rule.
 
@@ -2636,7 +2636,7 @@ def create_compliance_rule(
 def deactivate_compliance_rule(
     rule_id: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer")),
 ) -> ComplianceRule:
     """Deactivate a single rule version.
 
@@ -2681,7 +2681,7 @@ def deactivate_compliance_rule(
 def create_transfer_rule(
     payload: TransferRuleCreate,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer")),
 ) -> TransferRule:
     """Create a governance rule scoped to an issuer. 400 on an unknown
     rule_type or a malformed condition bag -- a broken rule must never
@@ -2896,7 +2896,7 @@ def approve_transfer_evaluation(
     evaluation_id: str,
     reviewer: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> TransferEvaluationOut:
     """Approve a PENDING evaluation and write its transfer event.
 
@@ -2983,7 +2983,7 @@ def reject_transfer_evaluation(
     evaluation_id: str,
     reviewer: str,
     session: Session = Depends(get_session),
-    _: str = Depends(require_api_key),
+    _: Any = Depends(require_role("admin", "compliance_officer", "reviewer")),
 ) -> TransferEvaluationOut:
     """Reject a PENDING evaluation. Nothing is written to the cap table;
     the rejection itself is recorded on the evaluation and in the ledger."""
