@@ -44,6 +44,7 @@ COPY migrations ./migrations
 # by name at request time -- without them the panel answers "knowledge base
 # is empty".
 COPY *.md ./
+COPY api-docs.html ./
 
 # Built React assets from the frontend stage
 COPY --from=frontend /build/dist ./dist
