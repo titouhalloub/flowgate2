@@ -680,6 +680,19 @@ def create_security(
     session: Session = Depends(get_session),
     _: str = Depends(require_api_key),
 ) -> SecurityModel:
+    # Idempotent on (issuer_name, name). The frontend's Record Event
+    # flow calls this endpoint on every click; without a dedupe here,
+    # a page reload mid-demo creates a fresh Security row for a name
+    # that already exists. Returning the existing row keeps a stable
+    # one-security-per-(issuer, class) invariant.
+    existing = session.execute(
+        select(SecurityModel).where(
+            SecurityModel.issuer_name == payload.issuer_name,
+            SecurityModel.name == payload.name,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
     security = SecurityModel(
         id=str(uuid4()),
         issuer_name=payload.issuer_name,
