@@ -3,6 +3,7 @@ import { ModernSidebar } from './components/ModernSidebar';
 import { FlowgateDashboard } from './components/FlowgateDashboard';
 import { PipelineView } from './components/PipelineView';
 import { CapTableView } from './components/CapTableView';
+import { ApiKeysView } from './components/ApiKeysView';
 import { CapitalCallsView } from './components/CapitalCallsView';
 import { InvestorPortfolioView } from './components/InvestorPortfolioView';
 import { AuditLedgerView } from './components/AuditLedgerView';
@@ -873,6 +874,33 @@ export default function App() {
               <ComplianceRulesView />
             </div>
           )}
+          {activeTab === 'apikeys' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl p-5 shadow-xs border border-gray-100 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-gray-900 tracking-tight">
+                      API Keys
+                    </h2>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#EBE7FD] text-[#7048E8] border border-purple-200/60">
+                      Self-Service
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Programmatic keys for the public API. The secret is shown once.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveTab('dashboard')}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#F4F6FC] hover:bg-[#EBE7FD] text-gray-700 hover:text-[#7048E8] border border-gray-200 transition-colors cursor-pointer"
+                >
+                  Back to Dashboard
+                </button>
+              </div>
+              <ApiKeysView />
+            </div>
+          )}
+
         </main>
         <AssistantPanel issuerName={currentIssuerName} />
       </div>

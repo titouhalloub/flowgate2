@@ -403,3 +403,29 @@ export interface InvestorPortfolio {
   total_islamic_exposure: number;
   fund_count: number;
 }
+
+// --- API keys (self-service) ---------------------------------------------
+export type ApiKeyRole = 'viewer' | 'reviewer' | 'compliance_officer' | 'admin';
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  role: ApiKeyRole;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  expires_at: string | null;
+}
+
+export interface ApiKeyCreated extends ApiKey {
+  /** Plaintext key. Returned by the backend exactly once, at creation. */
+  key: string;
+}
+
+export interface ApiKeyCreateInput {
+  name: string;
+  role: ApiKeyRole;
+  scopes?: Record<string, unknown>;
+  expires_at?: string | null;
+}

@@ -1,4 +1,7 @@
 import {
+  ApiKey,
+  ApiKeyCreateInput,
+  ApiKeyCreated,
   AssistantAnswer,
   CapTableEvent,
   CapTableSnapshot,
@@ -633,4 +636,20 @@ export async function getCapTable(issuerName: string): Promise<CapTableSnapshot>
 
 export async function listIssuers(): Promise<string[]> {
   return request<string[]>('/issuers');
+}
+// --- API keys ------------------------------------------------------------
+
+export async function listApiKeys(): Promise<ApiKey[]> {
+  return request<ApiKey[]>('/api-keys');
+}
+
+export async function createApiKey(input: ApiKeyCreateInput): Promise<ApiKeyCreated> {
+  return request<ApiKeyCreated>('/api-keys', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeApiKey(id: string): Promise<ApiKey> {
+  return request<ApiKey>(`/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

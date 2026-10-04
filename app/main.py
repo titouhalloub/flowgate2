@@ -27,6 +27,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api_schemas import (
+    ApiKeyCreate,
+    ApiKeyCreatedOut,
+    ApiKeyOut,
     AssistantAskRequest,
     AssistantAskResponse,
     CapitalCallCreate,
@@ -88,7 +91,8 @@ from app.config import settings
 from app.export import router as export_router
 from app.webhook_routes import router as webhook_router
 from app.api_docs import router as api_docs_router
-from app.auth import require_role, require_user as require_api_key
+from app.auth import require_role, require_user, require_user as require_api_key
+from app.api_keys import ALLOWED_ROLES, generate_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
     CapTableEventType,
@@ -110,6 +114,8 @@ from app.models.enums import (
     ValuationType,
 )
 from app.models.orm import (
+    ApiKey,
+    User,
     CapTableEvent,
     CapTableProposal,
     CapitalCall,
@@ -145,7 +151,7 @@ async def _lifespan(app: FastAPI):
 
 def _maybe_create_convertible_proposal(session, document, instrument):
     """If this document is a successful SAFE extraction, create a pending
-    CREATE_CONVERTIBLE proposal. Never creates a Convertible row directly —
+    CREATE_CONVERTIBLE proposal. Never creates a Convertible row directly â€”
     that happens only on approval.
 
     Idempotent: if a CREATE_CONVERTIBLE proposal already exists for this
@@ -3040,6 +3046,124 @@ def list_issuers(
 
 app.include_router(export_router)
 app.include_router(webhook_router)
+
+
+# --- API keys (self-service minting) ------------------------------------
+MAX_ACTIVE_KEYS_PER_USER = 10
+
+
+@app.post(
+    "/api-keys",
+    response_model=ApiKeyCreatedOut,
+    status_code=201,
+    responses={401: {"model": ErrorOut}},
+)
+def create_api_key(
+    payload: ApiKeyCreate,
+    session: Session = Depends(get_session),
+    user: Any = Depends(require_user),
+):
+    """Mint a key for the caller. The plaintext is returned exactly once."""
+    if payload.role not in ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"role must be one of: {', '.join(ALLOWED_ROLES)}",
+        )
+
+    # The legacy env-var API key authenticates as a synthetic identity
+    # with no row in `users`. Materialise one so api_keys.user_id can
+    # satisfy its foreign key.
+    if session.get(User, user.id) is None:
+        session.add(
+            User(
+                id=user.id,
+                external_auth_id=user.external_auth_id or user.id,
+                email=user.email,
+                role=user.role,
+            )
+        )
+        session.flush()
+
+    active = (
+        session.query(ApiKey)
+        .filter(ApiKey.user_id == user.id, ApiKey.revoked_at.is_(None))
+        .count()
+    )
+    if active >= MAX_ACTIVE_KEYS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Maximum of {MAX_ACTIVE_KEYS_PER_USER} active keys reached.",
+        )
+
+    full_key, prefix, key_hash = generate_api_key()
+    record = ApiKey(
+        id=str(uuid4()),
+        user_id=user.id,
+        name=payload.name,
+        prefix=prefix,
+        key_hash=key_hash,
+        role=payload.role,
+        scopes=dict(payload.scopes or {}),
+        expires_at=payload.expires_at,
+        created_by=user.id,
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return ApiKeyCreatedOut(
+        id=record.id,
+        name=record.name,
+        prefix=record.prefix,
+        role=record.role,
+        created_at=record.created_at,
+        last_used_at=record.last_used_at,
+        revoked_at=record.revoked_at,
+        expires_at=record.expires_at,
+        key=full_key,
+    )
+
+
+@app.get(
+    "/api-keys",
+    response_model=list[ApiKeyOut],
+    responses={401: {"model": ErrorOut}},
+)
+def list_api_keys(
+    session: Session = Depends(get_session),
+    user: Any = Depends(require_user),
+):
+    """List the caller's keys. Never exposes ``key`` or ``key_hash``."""
+    rows = (
+        session.query(ApiKey)
+        .filter(ApiKey.user_id == user.id)
+        .order_by(ApiKey.created_at.desc())
+        .all()
+    )
+    return [ApiKeyOut.model_validate(r) for r in rows]
+
+
+@app.delete(
+    "/api-keys/{key_id}",
+    responses={401: {"model": ErrorOut}, 404: {"model": ErrorOut}},
+)
+def revoke_api_key(
+    key_id: str,
+    session: Session = Depends(get_session),
+    user: Any = Depends(require_user),
+):
+    """Revoke a key. Idempotent: revoking twice is still 200."""
+    record = session.get(ApiKey, key_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="API key not found.")
+    if record.user_id != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not your API key.")
+    if record.revoked_at is None:
+        record.revoked_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(record)
+    return ApiKeyOut.model_validate(record)
+
+
 app.include_router(api_docs_router)
 
 @app.get("/{path:path}")

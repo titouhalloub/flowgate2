@@ -698,3 +698,31 @@ class WebhookDeliveryOut(BaseModel):
     delivered_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    role: str = Field(default="viewer")
+    scopes: dict[str, Any] = Field(default_factory=dict)
+    expires_at: datetime | None = None
+
+
+class ApiKeyOut(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    role: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    expires_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ApiKeyCreatedOut(ApiKeyOut):
+    """Creation response. ``key`` carries the plaintext exactly once."""
+
+    key: str
+
+    model_config = {"from_attributes": True}

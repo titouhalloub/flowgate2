@@ -76,3 +76,37 @@ Until then, two implementations of vesting math exist in the codebase.
 Any change to `app/captable.py`'s vesting math must be mirrored in
 `flowgateEngine.ts` in the same commit -- the pre-existing note above
 still applies to the FlowgateDashboard path.
+
+## Shared API key maps to admin
+
+The API key path in `app/auth.py` maps every configured key to
+`role="admin"` unless the operator sets `A27_API_KEYS` to a JSON
+object mapping keys to roles. The current dev/deploy key
+(`development_key_123`) is admin.
+
+Before any production onboarding:
+- Replace with a JSON allowlist, one key per integration, each with
+  the minimum role it needs.
+- Rotate the dev key; do not ship a known-value key.
+
+## ORM/migration drift on cap_table_events and instruments
+
+The ORM models declare columns that no Alembic migration creates:
+- cap_table_events: related_convertible_id, related_round_id, vesting_start_date,
+  vesting_period_months, cliff_months, acceleration_clause, is_repurchase,
+  repurchase_approver (8 columns)
+- instruments: jurisdictions (JSON)
+
+Local a27.db was built via create_all(), not migrations, so its schema is behind
+the ORM. Production Neon likely has these columns (features work there), but this
+needs verification before the next migration on production.
+
+Consequence: alembic revision --autogenerate produces destructive noise until
+this is reconciled. Every future migration requires hand-trimming. Specifically,
+autogenerate proposes adding instruments.jurisdictions as NOT NULL with no server
+default (fails on any table holding rows) and dropping the composite indexes
+ix_webhook_deliveries_subscription and ix_webhook_subscriptions_active.
+
+Fix (when there is time): write a deliberate migration that adds the missing
+columns with proper server_defaults, verify against a copy of production schema,
+then run alembic autogenerate cleanly.

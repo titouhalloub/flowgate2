@@ -1048,3 +1048,43 @@ class WebhookDelivery(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class ApiKey(Base):
+    """A self-service, per-user programmatic API key.
+
+    Only the SHA-256 digest of the key is stored. The plaintext is shown once
+    at creation and is unrecoverable thereafter; ``prefix`` is the first 16
+    characters so a user can identify a key in a list without exposing it.
+
+    ``scopes`` is carried but not yet enforced -- see TECH-DEBT.md.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prefix: Mapped[str] = mapped_column(
+        String(16), nullable=False, unique=True, index=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="viewer")
+    scopes: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.id"), nullable=True
+    )

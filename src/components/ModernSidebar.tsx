@@ -7,6 +7,7 @@ import {
   Coins,
   Settings,
   ShieldCheck,
+  KeyRound,
   Code,
   BookOpen,
   ChevronLeft,
@@ -71,6 +72,7 @@ export const ModernSidebar: React.FC<ModernSidebarProps> = ({
     { id: 'investors', label: 'Cross-Fund Investors', icon: Users },
     { id: 'ledger', label: 'Unified Audit Ledger', icon: ShieldCheck },
     { id: 'compliance', label: 'Compliance Rules', icon: ShieldCheck },
+    { id: 'apikeys', label: 'API Keys', icon: KeyRound },
     { id: 'repo', label: 'Repository Code & Docs', icon: Code },
     { id: 'api-docs', label: 'API Documentation', icon: BookOpen, href: '/api-docs' },
   ];
