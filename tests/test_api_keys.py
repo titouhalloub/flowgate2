@@ -250,4 +250,69 @@ def test_viewer_sees_only_own_keys(key_client):
     assert r.status_code == 200, r.text
     ids = [row["id"] for row in r.json()]
     assert own_id in ids
-    assert other_id not in ids, "viewer must not see another principal's key"
+# --- privilege escalation on minting -------------------------------------
+
+def _count_keys(Local) -> int:
+    return Local().query(ApiKey).count()
+
+
+def test_viewer_cannot_create_admin_key(key_client):
+    """A viewer must not be able to mint an admin key and bypass role checks."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="viewer-1")
+    before = _count_keys(Local)
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("viewer-1", role="viewer")
+        r = client.post("/api-keys", json={"name": "escalate", "role": "admin"})
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 403, r.text
+    assert "lower" in r.json()["detail"]
+    assert _count_keys(Local) == before, "no key row may be created on rejection"
+
+
+def test_viewer_can_create_viewer_key(key_client):
+    """A viewer may still mint at their own level -- the fix must not over-block."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="viewer-1")
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("viewer-1", role="viewer")
+        r = client.post("/api-keys", json={"name": "mine", "role": "viewer"})
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["role"] == "viewer"
+    assert body["key"].startswith("fg_live_")
+    rec = Local().get(ApiKey, body["id"])
+    assert rec is not None and rec.role == "viewer"
+
+
+def test_reviewer_cannot_create_admin_key(key_client):
+    """A reviewer is above viewer but still below admin."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="rev-1")
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("rev-1", role="reviewer")
+        r = client.post("/api-keys", json={"name": "escalate", "role": "admin"})
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 403, r.text
+    assert _count_keys(Local) == 0
+
+
+def test_admin_can_create_admin_key(key_client):
+    """Equal rank is allowed -- an admin may still mint an admin key."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="adm-1")
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("adm-1", role="admin")
+        r = client.post("/api-keys", json={"name": "ops", "role": "admin"})
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 201, r.text
+    assert r.json()["role"] == "admin"

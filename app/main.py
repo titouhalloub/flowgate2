@@ -92,7 +92,7 @@ from app.export import router as export_router
 from app.webhook_routes import router as webhook_router
 from app.api_docs import router as api_docs_router
 from app.auth import require_role, require_user, require_user as require_api_key
-from app.api_keys import ALLOWED_ROLES, generate_api_key
+from app.api_keys import generate_api_key
 from app.db import get_session, init_db
 from app.models.enums import (
     CapTableEventType,
@@ -3051,6 +3051,15 @@ app.include_router(webhook_router)
 # --- API keys (self-service minting) ------------------------------------
 MAX_ACTIVE_KEYS_PER_USER = 10
 
+#: Ordered privilege ladder. A caller may only mint keys at or below their own
+#: rank, so a viewer can never escalate into an admin key.
+ROLE_RANK = {
+    "viewer": 0,
+    "reviewer": 1,
+    "compliance_officer": 2,
+    "admin": 3,
+}
+
 
 @app.post(
     "/api-keys",
@@ -3064,10 +3073,21 @@ def create_api_key(
     user: Any = Depends(require_user),
 ):
     """Mint a key for the caller. The plaintext is returned exactly once."""
-    if payload.role not in ALLOWED_ROLES:
+    requested_rank = ROLE_RANK.get(payload.role)
+    caller_rank = ROLE_RANK.get(user.role)
+    if requested_rank is None:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {payload.role}")
+    if caller_rank is None:
         raise HTTPException(
-            status_code=400,
-            detail=f"role must be one of: {', '.join(ALLOWED_ROLES)}",
+            status_code=403, detail=f"Caller role is not recognized: {user.role}"
+        )
+    if requested_rank > caller_rank:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Cannot create a key with role '{payload.role}' — "
+                f"your role '{user.role}' is lower."
+            ),
         )
 
     # The legacy env-var API key authenticates as a synthetic identity
