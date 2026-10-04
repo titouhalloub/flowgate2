@@ -210,3 +210,44 @@ def test_cannot_revoke_other_users_key(key_client):
         r = client.delete(f"/api-keys/{rec_id}")
         app.dependency_overrides.pop(require_user, None)
     assert r.status_code == 403
+
+
+# --- listing visibility ---------------------------------------------------
+
+def test_admin_sees_all_keys(key_client):
+    """An admin sees keys owned by other principals, including the synthetic
+    ``api_key`` identity used by the legacy env-var key."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="api_key")
+    _, rec_id = _mint(Local, user_id="api_key", name="LegacyOwned")
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("admin-2", role="admin")
+        r = client.get("/api-keys")
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 200, r.text
+    ids = [row["id"] for row in r.json()]
+    assert rec_id in ids, "admin should see another principal's key"
+    assert "key_hash" not in r.text
+    assert all("key" not in row for row in r.json())
+
+
+def test_viewer_sees_only_own_keys(key_client):
+    """A non-admin never sees keys belonging to somebody else."""
+    client, Local = key_client
+    _seed_owner(Local, user_id="owner-1")
+    _, other_id = _mint(Local, user_id="owner-1", name="NotYours")
+
+    _seed_owner(Local, user_id="viewer-1")
+    _, own_id = _mint(Local, user_id="viewer-1", name="Yours")
+
+    with client:
+        app.dependency_overrides[require_user] = lambda: _admin("viewer-1", role="viewer")
+        r = client.get("/api-keys")
+        app.dependency_overrides.pop(require_user, None)
+
+    assert r.status_code == 200, r.text
+    ids = [row["id"] for row in r.json()]
+    assert own_id in ids
+    assert other_id not in ids, "viewer must not see another principal's key"

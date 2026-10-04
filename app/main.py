@@ -3132,13 +3132,14 @@ def list_api_keys(
     session: Session = Depends(get_session),
     user: Any = Depends(require_user),
 ):
-    """List the caller's keys. Never exposes ``key`` or ``key_hash``."""
-    rows = (
-        session.query(ApiKey)
-        .filter(ApiKey.user_id == user.id)
-        .order_by(ApiKey.created_at.desc())
-        .all()
-    )
+    """List API keys. Admins see every key; others see only their own.
+
+    Never exposes ``key`` or ``key_hash``.
+    """
+    query = session.query(ApiKey)
+    if user.role != "admin":
+        query = query.filter(ApiKey.user_id == user.id)
+    rows = query.order_by(ApiKey.created_at.desc()).all()
     return [ApiKeyOut.model_validate(r) for r in rows]
 
 
