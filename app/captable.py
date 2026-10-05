@@ -11,6 +11,7 @@ question rather than a lost fact.
 from __future__ import annotations
 
 import calendar
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -18,8 +19,8 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.enums import CapTableEventType
-from app.models.orm import CapTableEvent, Security
+from app.models.enums import CapTableEventType, SecurityType, ValuationType
+from app.models.orm import CapTableEvent, Security, Valuation
 
 
 # --------------------------------------------------------------------------- #
@@ -643,3 +644,81 @@ def compute_cap_table(
         total_unvested_shares=round(total_unvested, 4),
         grants=active_grants,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 409A Fair Market Value Gate
+# --------------------------------------------------------------------------- #
+
+#: Dedicated logger so the gate's diagnostics stay separable from route logs.
+gate_logger = logging.getLogger("flowgate.409a")
+
+
+def check_409a_gate(
+    session: Session,
+    security: Security,
+    event_type: str,
+    price_per_share: float | None,
+    effective_date: datetime,
+) -> tuple[str | None, Valuation | None]:
+    """Evaluate the Section 409A below-FMV gate for a proposed grant.
+
+    An option (or warrant) struck below the fair market value in effect on the
+    grant date is a Section 409A violation -- the grantee owes immediate tax and
+    penalties -- so the compliance gateway refuses to record it. The FMV that
+    applies is the latest 409A valuation dated on or before the event's
+    effective date; with no 409A on file yet there is nothing to violate and
+    issuance proceeds. Common and preferred issuances are not strikes and are
+    never gated.
+
+    Returns ``(rejection_message, applied_valuation)``. ``rejection_message``
+    is None when the grant passes. ``applied_valuation`` is the FMV that was
+    looked up (None when no 409A exists), so callers can report the value the
+    gate actually used without re-querying.
+    """
+    if event_type != CapTableEventType.ISSUANCE.value:
+        return None, None
+    if price_per_share is None:
+        return None, None
+    if security.security_type not in (SecurityType.OPTION, SecurityType.WARRANT):
+        gate_logger.info(
+            "409A gate SKIPPED: security_type=%s price_per_share=%r "
+            "(gate requires option/warrant + a non-null price)",
+            security.security_type,
+            price_per_share,
+        )
+        return None, None
+
+    gate_logger.info(
+        "409A gate ACTIVE: issuer=%r security_type=%s price_per_share=%r "
+        "effective_date=%r",
+        security.issuer_name,
+        security.security_type,
+        price_per_share,
+        effective_date,
+    )
+    fmv = session.execute(
+        select(Valuation)
+        .where(
+            Valuation.issuer_name == security.issuer_name,
+            Valuation.valuation_type == ValuationType.FMV_409A,
+            Valuation.valuation_date <= effective_date,
+        )
+        .order_by(Valuation.valuation_date.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    gate_logger.info(
+        "409A gate FMV lookup: issuer=%r -> %s",
+        security.issuer_name,
+        f"FMV {fmv.price_per_share} @ {fmv.valuation_date}"
+        if fmv else "None (no valuation on file)",
+    )
+    if fmv is not None and price_per_share < fmv.price_per_share:
+        return (
+            f"Strike price {price_per_share} is below the 409A "
+            f"fair market value of {fmv.price_per_share} in effect "
+            f"since {fmv.valuation_date.date().isoformat()} -- a "
+            "below-FMV grant violates Section 409A",
+            fmv,
+        )
+    return None, fmv

@@ -352,6 +352,39 @@ class CapTableHistoryOut(BaseModel):
     snapshots: list[CapTableHistorySnapshot] = []
 
 
+class GrantDryRunIn(BaseModel):
+    """A hypothetical grant to evaluate. Nothing here is persisted."""
+
+    issuer_name: str = Field(..., min_length=1, max_length=255)
+    holder_id: str = Field(..., min_length=1, max_length=64)
+    security_id: str = Field(..., min_length=1, max_length=64)
+    quantity: float = Field(..., gt=0)
+    price_per_share: float = Field(..., ge=0)
+    event_type: str = Field(..., pattern="^(issuance|exercise|conversion)$")
+    effective_date: datetime | None = None  # defaults to now (UTC)
+
+
+class RuleEvaluation(BaseModel):
+    rule_name: str
+    package_name: str
+    severity: str = Field(..., pattern="^(blocking|review|info)$")
+    passed: bool
+    detail: str | None = None
+
+
+class GrantDryRunOut(BaseModel):
+    compliant: bool
+    would_be_recorded: bool
+    rejection_reason: str | None = None
+    # Populated in a future phase when a grant-rule engine exists.
+    # Empty in Phase 1 -- the 409A gate is the only rule applied to grants today.
+    rule_evaluations: list[RuleEvaluation] = []
+    current_fmv: float | None = None
+    fmv_effective_date: datetime | None = None
+    fmv_stale: bool = False
+    evaluated_at: datetime
+
+
 class ValuationCreate(BaseModel):
     issuer_name: str = Field(..., min_length=1)
 

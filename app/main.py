@@ -59,6 +59,8 @@ from app.api_schemas import (
     HoldingCreate,
     HoldingOut,
     HolderPositionOut,
+    GrantDryRunIn,
+    GrantDryRunOut,
     HumanReviewRequest,
     InstrumentCreate,
     InstrumentOut,
@@ -88,6 +90,7 @@ from app.captable import (
     CapTableError,
     ConversionError,
     ConversionResult,
+    check_409a_gate,
     compute_cap_table,
     compute_conversions,
 )
@@ -773,59 +776,18 @@ def record_cap_table_event(
             detail="is_repurchase may only be True on CANCELLATION events",
         )
 
-    # 409A compliance gate: an option (or warrant) struck below the fair
-    # market value in effect on the grant date is a Section 409A violation
-    # -- the grantee owes immediate tax and penalties -- so the compliance
-    # gateway refuses to record it. The FMV that applies is the latest 409A
-    # valuation dated on or before the event's effective date; with no 409A
-    # on file yet there is nothing to violate and issuance proceeds. Common
-    # and preferred issuances are not strikes and are never gated.
-    if (
-        payload.event_type == CapTableEventType.ISSUANCE.value
-        and payload.price_per_share is not None
-        and security.security_type in (SecurityType.OPTION, SecurityType.WARRANT)
-    ):
-        logger.info(
-            "409A gate ACTIVE: issuer=%r security_type=%s price_per_share=%r "
-            "effective_date=%r",
-            security.issuer_name,
-            security.security_type,
-            payload.price_per_share,
-            payload.effective_date,
-        )
-        fmv = session.execute(
-            select(Valuation)
-            .where(
-                Valuation.issuer_name == security.issuer_name,
-                Valuation.valuation_type == ValuationType.FMV_409A,
-                Valuation.valuation_date <= payload.effective_date,
-            )
-            .order_by(Valuation.valuation_date.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        logger.info(
-            "409A gate FMV lookup: issuer=%r -> %s",
-            security.issuer_name,
-            f"FMV {fmv.price_per_share} @ {fmv.valuation_date}" if fmv else "None (no valuation on file)",
-        )
-        if fmv is not None and payload.price_per_share < fmv.price_per_share:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Strike price {payload.price_per_share} is below the 409A "
-                    f"fair market value of {fmv.price_per_share} in effect "
-                    f"since {fmv.valuation_date.date().isoformat()} -- a "
-                    "below-FMV grant violates Section 409A"
-                ),
-            )
-    elif payload.event_type == CapTableEventType.ISSUANCE.value:
-        # Diagnostic: the gate did NOT activate -- log why.
-        logger.info(
-            "409A gate SKIPPED: security_type=%s price_per_share=%r "
-            "(gate requires option/warrant + a non-null price)",
-            security.security_type,
-            payload.price_per_share,
-        )
+    # 409A compliance gate. The rule and its rationale live in
+    # app.captable.check_409a_gate so this write path and the read-only
+    # dry-run endpoint share one implementation and cannot drift.
+    _rejection, _applied_valuation = check_409a_gate(
+        session,
+        security,
+        payload.event_type,
+        payload.price_per_share,
+        payload.effective_date,
+    )
+    if _rejection is not None:
+        raise HTTPException(status_code=400, detail=_rejection)
 
     # Phase D governance gate: every proposed TRANSFER is evaluated against
     # the issuer's active rules BEFORE it reaches the append-only log. The
@@ -1037,6 +999,61 @@ def get_cap_table(
 # 409A valuations -- record-keeping for issuer fair market value
 # (CAPTABLE-ROADMAP-FEATURES.md Feature 2)
 # ---------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------- #
+# Grant dry-run (Phase 1)
+# --------------------------------------------------------------------------- #
+
+
+@app.post(
+    "/compliance/dry-run-grant",
+    response_model=GrantDryRunOut,
+    responses={401: {"model": ErrorOut}, 404: {"model": ErrorOut}},
+)
+def dry_run_grant(
+    payload: GrantDryRunIn,
+    session: Session = Depends(get_session),
+    _: Any = Depends(require_user),
+) -> GrantDryRunOut:
+    """Evaluate a hypothetical grant without writing to the ledger.
+
+    Read-only. Runs the same Section 409A gate that POST /cap-table-events
+    runs, and returns what that route *would* have done. Nothing is
+    persisted -- no cap_table_events row, no evaluation, no ledger entry.
+    """
+    security = session.get(SecurityModel, payload.security_id)
+    if security is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Security {payload.security_id!r} not found",
+        )
+
+    effective_date = payload.effective_date or datetime.now(timezone.utc)
+    rejection, valuation = check_409a_gate(
+        session,
+        security,
+        payload.event_type,
+        payload.price_per_share,
+        effective_date,
+    )
+    compliant = rejection is None
+    now = datetime.now(timezone.utc)
+    stale = (
+        valuation is not None
+        and _months_old(valuation.valuation_date, now) > _STALE_AFTER_MONTHS
+    )
+
+    return GrantDryRunOut(
+        compliant=compliant,
+        would_be_recorded=compliant,
+        rejection_reason=rejection,
+        rule_evaluations=[],
+        current_fmv=valuation.price_per_share if valuation is not None else None,
+        fmv_effective_date=valuation.valuation_date if valuation is not None else None,
+        fmv_stale=stale,
+        evaluated_at=now,
+    )
 
 # --- Cap table history (event-sourced time series) -----------------------
 
