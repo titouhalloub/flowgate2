@@ -139,3 +139,18 @@ one-off ALTER TABLE migration against it. Or run the missing-columns
 migration from the earlier "ORM/migration drift" entry above.
 
 Not blocking for production deployments. Blocks local dev.
+
+## tests/conftest.py client fixture breaks require_role-guarded routes
+The `client` fixture overrides require_api_key with the bare string
+"test-key-123". require_role (app/auth.py:248) dereferences user.role
+on that string and raises AttributeError. Every seed route guarded by
+require_role therefore fails in tests.
+
+Effect: ~90 pre-existing test failures, none reflecting real bugs. New
+test files work around this by using a separate fixture (client2 in
+tests/test_compliance_dry_run.py, test_cap_table_history.py) that
+overrides with a real AuthUser.
+
+Fix: change the conftest override to return an AuthUser(role="admin",
+id="test-user", auth_method="api_key"). Small, isolated, unblocks the
+suite.
