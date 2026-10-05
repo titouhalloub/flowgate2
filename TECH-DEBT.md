@@ -154,3 +154,15 @@ overrides with a real AuthUser.
 Fix: change the conftest override to return an AuthUser(role="admin",
 id="test-user", auth_method="api_key"). Small, isolated, unblocks the
 suite.
+
+## Seeded demo data has duplicates and type mismatches
+
+- Two "Tariq Al-Mansoor" investor rows (4371ec73..., e3490360...) created
+  an hour apart on 2026-09-13. Ownership splits across both IDs.
+- Apex Horizon Growth Fund LP and Horizon Ventures LLC typed as "individual"
+  instead of "fund" or "spv".
+- kyc_verified is false for every investor, including seeded ones.
+
+None of these affect the 409A gate or compliance engine behavior, but they
+will show up in any pilot demo. Clean before the first paid customer.
+
