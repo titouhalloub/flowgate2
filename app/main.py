@@ -8,9 +8,11 @@ handling -- not business logic.
 """
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 import secrets
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +43,9 @@ from app.api_schemas import (
     PaymentOut,
     CapTableEventCreate,
     CapTableEventOut,
+    CapTableHistoryHolder,
+    CapTableHistoryOut,
+    CapTableHistorySnapshot,
     CapTableOut,
     CapTableProposalOut,
     ConversionResultOut,
@@ -1032,6 +1037,178 @@ def get_cap_table(
 # 409A valuations -- record-keeping for issuer fair market value
 # (CAPTABLE-ROADMAP-FEATURES.md Feature 2)
 # ---------------------------------------------------------------------------
+
+# --- Cap table history (event-sourced time series) -----------------------
+
+#: Valid values for the `interval` query parameter.
+HISTORY_INTERVALS = ("monthly", "weekly")
+
+#: How many holders the history endpoint breaks out individually.
+HISTORY_TOP_HOLDERS = 6
+
+#: `months` is clamped to this range; outside it we 400 rather than 422.
+HISTORY_MIN_MONTHS = 1
+HISTORY_MAX_MONTHS = 24
+
+
+def _month_end(y: int, m: int) -> date:
+    return date(y, m, calendar.monthrange(y, m)[1])
+
+
+def _history_boundaries(today: date, months: int, interval: str) -> list[date]:
+    """Snapshot boundaries, oldest first, every one <= ``today``.
+
+    Monthly: the last day of each of the last ``months`` *completed* calendar
+    months. Weekly: the most recent Sunday plus ``months * 4`` prior Sundays.
+    """
+    if interval == "weekly":
+        # weekday(): Mon=0 .. Sun=6. Snap back to the most recent Sunday.
+        end = today - timedelta(days=(today.weekday() + 1) % 7)
+        return [end - timedelta(weeks=i) for i in range(months * 4)][::-1]
+
+    y, m = today.year, today.month
+    # If the current month has not ended yet, start from the previous one so
+    # every boundary is a real, already-elapsed month-end.
+    if _month_end(y, m) > today:
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    out: list[date] = []
+    for _ in range(months):
+        out.append(_month_end(y, m))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return out[::-1]
+
+
+def _holder_totals(snapshot) -> dict[str, float]:
+    totals: dict[str, float] = defaultdict(float)
+    for p in snapshot.positions:
+        totals[p.holder_id] += p.shares
+    return dict(totals)
+
+
+def _history_snapshot(
+    snapshot, boundary: date, holder_names: dict[str, str], top_ids: set[str]
+) -> CapTableHistorySnapshot:
+    """Project one replayed CapTableSnapshot into the history response shape."""
+    totals = _holder_totals(snapshot)
+    total = snapshot.total_fully_diluted_shares
+    rows: list[CapTableHistoryHolder] = []
+    other = 0.0
+    for holder_id, shares in totals.items():
+        if holder_id in top_ids:
+            rows.append(
+                CapTableHistoryHolder(
+                    holder_id=holder_id,
+                    holder_name=holder_names.get(holder_id, "unknown"),
+                    shares=shares,
+                    ownership_percent=round(shares / total * 100, 4) if total > 0 else 0.0,
+                )
+            )
+        else:
+            other += shares
+    rows.sort(key=lambda r: (-r.shares, r.holder_id))
+    return CapTableHistorySnapshot(
+        date=boundary.isoformat(),
+        total_fully_diluted_shares=total,
+        total_vested_shares=snapshot.total_vested_shares,
+        total_unvested_shares=snapshot.total_unvested_shares,
+        holder_count=len(totals),
+        top_holders=rows,
+        other_holders_total=other,
+    )
+
+
+@app.get(
+    "/cap-table/{issuer_name}/history",
+    response_model=CapTableHistoryOut,
+    responses={401: {"model": ErrorOut}, 400: {"model": ErrorOut}},
+)
+def get_cap_table_history(
+    issuer_name: str,
+    months: int = Query(default=6),
+    interval: str = Query(default="monthly"),
+    session: Session = Depends(get_session),
+    _: str = Depends(require_api_key),
+) -> CapTableHistoryOut:
+    """Month-end snapshots of the cap table, produced by replaying events.
+
+    Each boundary calls ``compute_cap_table`` with that boundary as ``as_of``.
+    That re-queries and re-replays per snapshot -- O(N x M). Fine at this
+    scale; see TECH-DEBT.md.
+
+    An unknown issuer yields 200 with an empty ``snapshots`` list, matching
+    ``GET /cap-table/{issuer_name}`` rather than introducing a 404.
+    """
+    if months < HISTORY_MIN_MONTHS or months > HISTORY_MAX_MONTHS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"months must be between {HISTORY_MIN_MONTHS} and "
+                f"{HISTORY_MAX_MONTHS} (got {months})"
+            ),
+        )
+    if interval not in HISTORY_INTERVALS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"interval must be one of: {', '.join(HISTORY_INTERVALS)}",
+        )
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    boundaries = _history_boundaries(today, months, interval)
+
+    # Replay the current state once to decide which holders get their own
+    # series. Pinning the top-N set from the final snapshot keeps a stacked
+    # chart stable instead of reshuffling its series each period.
+    current = compute_cap_table(session, issuer_name, as_of=now)
+    current_totals = _holder_totals(current)
+    if not current_totals:
+        # Unknown issuer, or an issuer with no events yet. Both answer 200 with
+        # an empty series rather than inventing zero-valued periods.
+        return CapTableHistoryOut(
+            issuer_name=issuer_name,
+            as_of=now,
+            interval=interval,
+            snapshots=[],
+        )
+    top_ids = {
+        holder_id
+        for holder_id, _ in sorted(
+            current_totals.items(), key=lambda kv: (-kv[1], kv[0])
+        )[:HISTORY_TOP_HOLDERS]
+    }
+
+    holder_ids = set(current_totals)
+    holder_names: dict[str, str] = {}
+    if holder_ids:
+        holder_names = {
+            h.id: h.name
+            for h in session.execute(
+                select(Investor).where(Investor.id.in_(holder_ids))
+            ).scalars()
+        }
+
+    snapshots: list[CapTableHistorySnapshot] = []
+    for boundary in boundaries:
+        as_of = datetime.combine(boundary, datetime.max.time(), tzinfo=timezone.utc)
+        try:
+            snap = compute_cap_table(session, issuer_name, as_of=as_of)
+        except CapTableError:
+            # A boundary that predates a malformed event yields no snapshot
+            # rather than failing the whole series.
+            continue
+        snapshots.append(_history_snapshot(snap, boundary, holder_names, top_ids))
+
+    return CapTableHistoryOut(
+        issuer_name=issuer_name,
+        as_of=now,
+        interval=interval,
+        snapshots=snapshots,
+    )
+
 
 # A 409A older than 12 months is stale: surfaced as a warning (nag) on the
 # latest-valuation read and the cap table -- never a hard block.

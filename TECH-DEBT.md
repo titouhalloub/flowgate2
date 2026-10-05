@@ -110,3 +110,32 @@ ix_webhook_deliveries_subscription and ix_webhook_subscriptions_active.
 Fix (when there is time): write a deliberate migration that adds the missing
 columns with proper server_defaults, verify against a copy of production schema,
 then run alembic autogenerate cleanly.
+
+## /cap-table/{issuer}/history is O(NxM)
+Each snapshot calls compute_cap_table(), which re-queries and re-replays
+events from scratch. With M<=24 boundaries and N<1000 events this is fine
+(sub-100ms in practice). If an issuer with 10k+ events needs history,
+refactor captable.py to expose a resumable accumulator that emits
+snapshots at each boundary from a single pass.
+
+## Local a27.db missing ORM-declared columns
+Local SQLite (a27.db) was created via Base.metadata.create_all() at some
+point, but the ORM has since gained columns that no migration created:
+  - cap_table_events: related_convertible_id, related_round_id,
+    vesting_start_date, vesting_period_months, cliff_months,
+    acceleration_clause, is_repurchase, repurchase_approver
+  - instruments: jurisdictions
+
+Consequence: any local route that queries cap_table_events 500s with
+"no such column". This blocks local smoke testing of /cap-table,
+/cap-table/.../history, POST /cap-table-events, and anything else that
+touches events. Tests pass because conftest runs create_all(), which
+creates the missing columns in the test DB.
+
+Production (Neon) has the columns, so this is a local-only problem.
+
+Fix: drop a27.db and recreate it via `alembic upgrade head`, or run a
+one-off ALTER TABLE migration against it. Or run the missing-columns
+migration from the earlier "ORM/migration drift" entry above.
+
+Not blocking for production deployments. Blocks local dev.

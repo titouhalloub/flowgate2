@@ -325,6 +325,37 @@ class CapTableOut(BaseModel):
     latest_409a_stale: bool = False
 
 
+class CapTableHistoryHolder(BaseModel):
+    holder_id: str
+    holder_name: str
+    shares: float
+    ownership_percent: float
+
+
+class CapTableHistorySnapshot(BaseModel):
+    # ISO-8601 date, e.g. "2026-05-31" (a month-end for interval="monthly").
+    date: str
+    total_fully_diluted_shares: float
+    total_vested_shares: float
+    total_unvested_shares: float
+    holder_count: int
+    # Always the same six (or fewer) holder ids across every snapshot so a
+    # stacked chart does not reshuffle its series; chosen from the final state.
+    top_holders: list[CapTableHistoryHolder]
+    other_holders_total: float
+
+
+class CapTableHistoryOut(BaseModel):
+    issuer_name: str
+    as_of: datetime
+    interval: str
+    snapshots: list[CapTableHistorySnapshot] = []
+
+
+class ValuationCreate(BaseModel):
+    issuer_name: str = Field(..., min_length=1)
+
+
 class ValuationCreate(BaseModel):
     issuer_name: str = Field(..., min_length=1)
     valuation_date: datetime
