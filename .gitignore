@@ -44,3 +44,5 @@ server_err.txt
 server_log.txt
 pytest_*.txt
 server.log
+Flowgate-Financials.xlsx
+plugins storm_idae.docx
