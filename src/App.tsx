@@ -91,24 +91,24 @@ export default function App() {
     },
   ]);
   const [capitalCalls, setCapitalCalls] = useState<CapitalCall[]>(INITIAL_CAPITAL_CALLS);
-  const [investors, setInvestors] = useState<Investor[]>(INITIAL_INVESTORS);
+  const [investors, setInvestors] = useState<Investor[]>([]);
 
-  // Live bootstrap: when the Python FastAPI backend is reachable, hydrate the
-  // registries from the server instead of the demo seeds. On failure the demo
-  // seeds stay and the app keeps running in demo mode.
+  // Live bootstrap: fetch each registry from the FastAPI backend on mount.
+  // Each call resolves independently. One failing does not affect the others.
+  // Registries stay empty on failure; there is no hardcoded fallback.
   const refreshFromServer = useCallback(async () => {
     try {
-      const [serverInvestors, serverCalls, serverProposals, latestValuation] = await Promise.all([
+      const [investorsResult, callsResult, proposalsResult, valuationResult] = await Promise.allSettled([
         liveApi.listInvestors(),
         liveApi.listCapitalCalls(),
         liveApi.listProposals(),
         // Never rejects -- null when no valuation is on file / offline.
         liveApi.getLatestValuation(currentIssuerName),
       ]);
-      setInvestors(serverInvestors);
-      setCapitalCalls(serverCalls);
-      setProposals(serverProposals);
-      setLatest409a(latestValuation);
+      if (investorsResult.status === 'fulfilled') setInvestors(investorsResult.value);
+      if (callsResult.status === 'fulfilled') setCapitalCalls(callsResult.value);
+      if (proposalsResult.status === 'fulfilled') setProposals(proposalsResult.value);
+      if (valuationResult.status === 'fulfilled') setLatest409a(valuationResult.value);
     } catch {
       // Backend unreachable (or sleeping Render instance) -- demo mode.
     }
