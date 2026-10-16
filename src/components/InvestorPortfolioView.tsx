@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { Investor } from '../types';
 import { InvestorPortfolio } from '../types';
 import { getInvestorPortfolio, ApiRequestError } from '../services/api';
@@ -42,9 +42,49 @@ export const InvestorPortfolioView: React.FC<InvestorPortfolioViewProps> = ({
   const [selectedInvestorId, setSelectedInvestorId] = useState<string>(
     investors[0]?.id ?? '',
   );
+  // Holdings per investor, learned by probing each portfolio once. The
+  // /investors payload has no holding count, so this is how the view finds out
+  // who actually has cross-fund data (no backend change needed).
+  const [holdingCounts, setHoldingCounts] = useState<Record<string, number>>({});
+  const userPickedRef = useRef(false);
   const [portfolio, setPortfolio] = useState<InvestorPortfolio | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Default selection: the registry is sorted by name, so investors[0] is often
+  // an empty leftover (e.g. a DEMO_ row) and every chart reads "No positions".
+  // Keep a valid selection, otherwise start on investors[0], then once the
+  // portfolios have been probed move to the first investor that has holdings
+  // -- unless the user has already picked someone themselves.
+  useEffect(() => {
+    if (investors.length === 0) {
+      setSelectedInvestorId('');
+      return;
+    }
+    setSelectedInvestorId((prev) =>
+      prev && investors.some((i) => i.id === prev) ? prev : investors[0].id,
+    );
+    let cancelled = false;
+    Promise.allSettled(investors.map((inv) => getInvestorPortfolio(inv.id))).then(
+      (results) => {
+        if (cancelled) return;
+        const counts: Record<string, number> = {};
+        results.forEach((r, idx) => {
+          if (r.status === 'fulfilled') {
+            counts[investors[idx].id] = r.value.holdings.length;
+          }
+        });
+        setHoldingCounts(counts);
+        if (!userPickedRef.current) {
+          const firstWithData = investors.find((inv) => (counts[inv.id] ?? 0) > 0);
+          if (firstWithData) setSelectedInvestorId(firstWithData.id);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [investors]);
 
   useEffect(() => {
     if (!selectedInvestorId) {
@@ -173,13 +213,19 @@ export const InvestorPortfolioView: React.FC<InvestorPortfolioViewProps> = ({
         <label className="text-xs font-semibold text-gray-600">Investor</label>
         <select
           value={selectedInvestorId}
-          onChange={(e) => setSelectedInvestorId(e.target.value)}
+          onChange={(e) => {
+            userPickedRef.current = true;
+            setSelectedInvestorId(e.target.value);
+          }}
           className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white min-w-[220px]"
         >
           {investors.length === 0 && <option value="">No investors yet</option>}
           {investors.map((inv) => (
             <option key={inv.id} value={inv.id}>
               {inv.name}
+              {holdingCounts[inv.id] !== undefined
+                ? ` (${holdingCounts[inv.id]} ${holdingCounts[inv.id] === 1 ? 'position' : 'positions'})`
+                : ''}
             </option>
           ))}
         </select>
@@ -194,6 +240,12 @@ export const InvestorPortfolioView: React.FC<InvestorPortfolioViewProps> = ({
       {loading && (
         <div className="flex items-center gap-2 text-xs text-gray-500">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading portfolio...
+        </div>
+      )}
+
+      {!loading && portfolio && portfolio.holdings.length === 0 && (
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+          This investor has no cross-fund positions.
         </div>
       )}
 
