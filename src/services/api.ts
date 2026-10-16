@@ -25,7 +25,7 @@ import {
 // falls back to the local demo mutation only if the API call fails.
 // ---------------------------------------------------------------------------
 let apiBase = '';
-let apiKey = 'development_key_123';
+let apiKey = '';
 let cachedInstrumentId: string | null = null;
 
 export function configureApi(base: string, key: string): void {

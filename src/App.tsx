@@ -46,10 +46,19 @@ function isClientRejection(err: unknown): err is liveApi.ApiRequestError {
   );
 }
 
-function JwtBridge() {
-  const { getToken, isLoaded } = useAuth();
+export default function App() {
+  // Register the Clerk JWT getter BEFORE any API hydration runs. Previously
+  // this lived in a <JwtBridge/> mounted inside <SignedIn>, which rendered
+  // after the mount-time fetch had already fired with the fallback dev API key
+  // (401, swallowed by allSettled). `authReady` gates hydration on the getter
+  // being registered for a signed-in user.
+  const { getToken, isLoaded, isSignedIn } = useAuth();
+  const [authReady, setAuthReady] = useState(false);
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || !isSignedIn) {
+      setAuthReady(false);
+      return;
+    }
     setJwtGetter(async () => {
       try {
         return await getToken();
@@ -57,11 +66,9 @@ function JwtBridge() {
         return null;
       }
     });
-  }, [isLoaded, getToken]);
-  return null;
-}
+    setAuthReady(true);
+  }, [isLoaded, isSignedIn, getToken]);
 
-export default function App() {
   // Default active tab to the modern dashboard requested by user
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
@@ -106,8 +113,11 @@ export default function App() {
         liveApi.getLatestValuation(currentIssuerName),
       ]);
       if (investorsResult.status === 'fulfilled') setInvestors(investorsResult.value);
+      else console.warn('[flowgate] listInvestors failed:', investorsResult.reason);
       if (callsResult.status === 'fulfilled') setCapitalCalls(callsResult.value);
+      else console.warn('[flowgate] listCapitalCalls failed:', callsResult.reason);
       if (proposalsResult.status === 'fulfilled') setProposals(proposalsResult.value);
+      else console.warn('[flowgate] listProposals failed:', proposalsResult.reason);
       if (valuationResult.status === 'fulfilled') setLatest409a(valuationResult.value);
     } catch {
       // Backend unreachable (or sleeping Render instance) -- demo mode.
@@ -122,8 +132,9 @@ export default function App() {
   const [bootstrapped, setBootstrapped] = useState(false);
 
   useEffect(() => {
+    if (!authReady) return;
     refreshFromServer().finally(() => setBootstrapped(true));
-  }, [refreshFromServer]);
+  }, [refreshFromServer, authReady]);
 
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([
     {
@@ -166,6 +177,7 @@ export default function App() {
   const [capTableSnapshot, setCapTableSnapshot] = useState<CapTableSnapshot | null>(null);
   const [capTableRefreshKey, setCapTableRefreshKey] = useState(0);
   useEffect(() => {
+    if (!authReady) return;
     let cancelled = false;
     liveApi
       .getCapTable(currentIssuerName)
@@ -178,7 +190,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentIssuerName, capTableRefreshKey]);
+  }, [currentIssuerName, capTableRefreshKey, authReady]);
 
   // Handler: Pipeline Run Completed
   const handlePipelineCompleted = (result: PipelineRunResult) => {
@@ -601,7 +613,6 @@ export default function App() {
   return (
     <>
       <SignedIn>
-        <JwtBridge />
         <div className="min-h-screen bg-[#F4F6FB] flex flex-row selection:bg-[#7048E8] selection:text-white font-sans">
       {/* Left Vertical Modern Sidebar matching screenshot */}
       <ModernSidebar
